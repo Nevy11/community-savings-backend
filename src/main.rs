@@ -13,7 +13,7 @@ use config::{create_pool, AppConfig};
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,
-    pub mpesa_callback_secret: String,
+    pub config: AppConfig,
 }
 
 #[tokio::main]
@@ -25,7 +25,7 @@ async fn main() {
 
     let state = AppState {
         pool,
-        mpesa_callback_secret: config.mpesa_callback_secret,
+        config: config.clone(),
     };
 
     let app = Router::new()

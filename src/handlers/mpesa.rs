@@ -51,7 +51,7 @@ async fn mpesa_callback(
     mpesa::verify_mpesa_signature(
         &canonical_payload,
         signature,
-        &state.mpesa_callback_secret,
+        &state.config.mpesa_callback_secret,
     )?;
 
     validation::validate_phone_number(&payload.phone_number)?;
