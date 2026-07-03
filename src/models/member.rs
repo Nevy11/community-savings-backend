@@ -14,6 +14,7 @@ pub struct Member {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "attendance_status", rename_all = "snake_case")]
 pub enum AttendanceStatus {
     Present,

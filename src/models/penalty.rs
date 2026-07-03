@@ -4,6 +4,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "penalty_type", rename_all = "snake_case")]
 pub enum PenaltyType {
     Attendance,
