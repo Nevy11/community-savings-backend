@@ -1,4 +1,3 @@
-pub mod auth;
 pub mod cycles;
 pub mod groups;
 pub mod loans;
@@ -7,14 +6,15 @@ pub mod members;
 pub mod mpesa;
 pub mod penalties;
 pub mod transactions;
+pub mod users;
 
 use axum::Router;
 
 use crate::AppState;
 
-pub fn routes() -> Router<AppState> {
-    Router::new()
-        .nest("/auth", auth::routes())
+pub fn routes(state: AppState) -> Router<AppState> {
+    let protected_routes = Router::new()
+        .nest("/users", users::routes())
         .nest("/groups", groups::routes())
         .nest("/cycles", cycles::routes())
         .nest("/meetings", meetings::routes())
@@ -22,5 +22,9 @@ pub fn routes() -> Router<AppState> {
         .nest("/transactions", transactions::routes())
         .nest("/loans", loans::routes())
         .nest("/penalties", penalties::routes())
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::middleware::require_auth));
+
+    Router::new()
+        .merge(protected_routes)
         .nest("/mpesa", mpesa::routes())
 }

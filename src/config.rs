@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub mpesa_consumer_secret: String,
     pub mpesa_passkey: String,
     pub mpesa_shortcode: String,
+    pub supabase_jwt_secret: String,
 }
 
 impl AppConfig {
@@ -39,6 +40,9 @@ impl AppConfig {
             
         let mpesa_shortcode = std::env::var("MPESA_SHORTCODE")
             .unwrap_or_default();
+            
+        let supabase_jwt_secret = std::env::var("SUPABASE_JWT_SECRET")
+            .unwrap_or_else(|_| "super-secret-jwt-token-with-at-least-32-bytes-long".into());
 
         Self {
             database_url,
@@ -49,6 +53,7 @@ impl AppConfig {
             mpesa_consumer_secret,
             mpesa_passkey,
             mpesa_shortcode,
+            supabase_jwt_secret,
         }
     }
 }

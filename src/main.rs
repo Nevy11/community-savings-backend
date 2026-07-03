@@ -1,6 +1,7 @@
 mod config;
 mod error;
 mod handlers;
+mod middleware;
 mod models;
 mod services;
 
@@ -31,7 +32,7 @@ async fn main() {
     let app = Router::new()
         .route("/ping", get(|| async { "pong" }))
         .route("/health", get(|| async { JsonHealth::ok() }))
-        .nest("/api", handlers::routes())
+        .nest("/api", handlers::routes(state.clone()))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
