@@ -1,0 +1,158 @@
+use axum::{
+    extract::{Path, Query, State},
+    routing::get,
+    Json, Router,
+};
+use serde::Deserialize;
+use sqlx::{Postgres, Transaction};
+use uuid::Uuid;
+
+use crate::{
+    error::{AppError, AppResult},
+    models::transaction::{AppendLedgerRequest, LedgerEntry, TxType},
+    services::validation,
+    AppState,
+};
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(list_ledger).post(append_ledger))
+        .route("/{id}", get(get_ledger_entry))
+}
+
+#[derive(Debug, Deserialize)]
+struct LedgerQuery {
+    group_id: Option<Uuid>,
+    member_id: Option<Uuid>,
+}
+
+async fn list_ledger(
+    State(state): State<AppState>,
+    Query(query): Query<LedgerQuery>,
+) -> AppResult<Json<Vec<LedgerEntry>>> {
+    let entries = match (query.group_id, query.member_id) {
+        (Some(group_id), Some(member_id)) => {
+            sqlx::query_as::<_, LedgerEntry>(
+                r#"
+                SELECT * FROM ledger_transactions
+                WHERE group_id = $1 AND member_id = $2
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(group_id)
+            .bind(member_id)
+            .fetch_all(&state.pool)
+            .await?
+        }
+        (Some(group_id), None) => {
+            sqlx::query_as::<_, LedgerEntry>(
+                r#"
+                SELECT * FROM ledger_transactions
+                WHERE group_id = $1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(group_id)
+            .fetch_all(&state.pool)
+            .await?
+        }
+        (None, Some(member_id)) => {
+            sqlx::query_as::<_, LedgerEntry>(
+                r#"
+                SELECT * FROM ledger_transactions
+                WHERE member_id = $1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(member_id)
+            .fetch_all(&state.pool)
+            .await?
+        }
+        (None, None) => {
+            sqlx::query_as::<_, LedgerEntry>(
+                "SELECT * FROM ledger_transactions ORDER BY created_at DESC",
+            )
+            .fetch_all(&state.pool)
+            .await?
+        }
+    };
+
+    Ok(Json(entries))
+}
+
+async fn get_ledger_entry(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<LedgerEntry>> {
+    let entry = sqlx::query_as::<_, LedgerEntry>(
+        "SELECT * FROM ledger_transactions WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(entry))
+}
+
+async fn append_ledger(
+    State(state): State<AppState>,
+    Json(payload): Json<AppendLedgerRequest>,
+) -> AppResult<Json<LedgerEntry>> {
+    validation::validate_append_only_tx(payload.amount, payload.tx_type)?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let entry = append_ledger_in_tx(&mut tx, &payload).await?;
+
+    tx.commit().await?;
+    Ok(Json(entry))
+}
+
+pub async fn append_ledger_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    payload: &AppendLedgerRequest,
+) -> AppResult<LedgerEntry> {
+    validation::validate_append_only_tx(payload.amount, payload.tx_type)?;
+
+    sqlx::query("SELECT id FROM groups WHERE id = $1 FOR UPDATE")
+        .bind(payload.group_id)
+        .fetch_one(&mut **tx)
+        .await?;
+
+    let entry = sqlx::query_as::<_, LedgerEntry>(
+        r#"
+        INSERT INTO ledger_transactions (group_id, member_id, amount, tx_type, reference)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+        "#,
+    )
+    .bind(payload.group_id)
+    .bind(payload.member_id)
+    .bind(payload.amount)
+    .bind(payload.tx_type)
+    .bind(&payload.reference)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    let pool_delta = match payload.tx_type {
+        TxType::Deposit | TxType::SocialFundPayment | TxType::LoanRepayment | TxType::FinePayment => {
+            payload.amount
+        }
+        TxType::Withdrawal | TxType::LoanDisbursement | TxType::DividendPayout => payload.amount,
+    };
+
+    sqlx::query(
+        r#"
+        UPDATE groups
+        SET pool_balance = pool_balance + $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(payload.group_id)
+    .bind(pool_delta)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(entry)
+}
