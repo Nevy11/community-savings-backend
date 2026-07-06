@@ -1,5 +1,6 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -15,7 +16,18 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    fn load_dotenv() {
+        let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env");
+        if env_path.exists() {
+            dotenvy::from_path(&env_path).ok();
+        } else {
+            dotenvy::dotenv().ok();
+        }
+    }
+
     pub fn from_env() -> Self {
+        Self::load_dotenv();
+
         let port = std::env::var("PORT")
             .ok()
             .and_then(|p| p.parse().ok())
