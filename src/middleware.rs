@@ -40,6 +40,10 @@ pub async fn require_auth(
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Allow preflight requests through without authentication
+    if req.method() == axum::http::Method::OPTIONS {
+        return Ok(next.run(req).await);
+    }
     let auth_header = req.headers().get(header::AUTHORIZATION);
     
     let auth_header = match auth_header {
