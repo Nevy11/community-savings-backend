@@ -29,6 +29,26 @@ pub fn validate_phone_number(phone: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub fn validate_username(username: &str) -> AppResult<()> {
+    let len = username.len();
+    if len < 3 || len > 32 {
+        return Err(AppError::BadRequest(
+            "username must be between 3 and 32 characters".into(),
+        ));
+    }
+
+    if !username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return Err(AppError::BadRequest(
+            "username may only contain letters, numbers, underscores, and dots".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn validate_meeting_day(day: i32) -> AppResult<()> {
     if !(0..=6).contains(&day) {
         return Err(AppError::BadRequest(

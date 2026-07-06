@@ -22,7 +22,12 @@ async fn main() {
     let config = AppConfig::from_env();
     let pool = create_pool(&config.database_url)
         .await
-        .expect("failed to connect to database");
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to connect to database: {err}\n\
+                 Check DATABASE_URL on Render — password must be URL-encoded and port must be 5432."
+            );
+        });
 
     let state = AppState {
         pool,

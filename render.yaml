@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: community-savings-backend
+    runtime: rust
+    buildCommand: cargo build --release
+    startCommand: ./target/release/community-savings-backend
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: MPESA_CALLBACK_SECRET
+        sync: false

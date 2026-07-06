@@ -10,13 +10,29 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserMetadata {
+    pub full_name: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: String,
     pub email: Option<String>,
     pub role: Option<String>,
-    // Supabase specific claims
+    pub user_metadata: Option<UserMetadata>,
     pub aud: String,
     pub exp: usize,
+}
+
+impl Claims {
+    pub fn full_name(&self) -> Option<String> {
+        self.user_metadata.as_ref().and_then(|meta| {
+            meta.full_name
+                .clone()
+                .or_else(|| meta.name.clone())
+        })
+    }
 }
 
 pub async fn require_auth(
