@@ -3,6 +3,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
+use chrono::{Datelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -101,18 +102,61 @@ pub struct DashboardMetrics {
 }
 
 async fn dashboard_metrics(
-    State(_state): State<AppState>,
-    Path(_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
 ) -> AppResult<Json<DashboardMetrics>> {
-    // TODO: implement real sql queries for this.
-    // Stubbed for now so frontend can integrate
+    let now = Utc::now();
+
+    let group = sqlx::query_as::<_, Group>("SELECT * FROM groups WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(crate::error::AppError::NotFound)?;
+
+    let total_active_loans: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(principal), 0) FROM loans WHERE group_id = $1 AND status IN ('approved', 'disbursed')",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let total_fines_accrued: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0) FROM penalties WHERE group_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let active_members_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM members WHERE group_id = $1 AND is_active = true",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let total_contributions_this_month: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(amount), 0)
+        FROM ledger_transactions
+        WHERE group_id = $1
+          AND tx_type IN ('deposit', 'social_fund_payment', 'fine_payment', 'loan_repayment')
+          AND EXTRACT(MONTH FROM created_at) = $2
+          AND EXTRACT(YEAR FROM created_at) = $3
+        "#,
+    )
+    .bind(id)
+    .bind(i64::from(now.month()))
+    .bind(i64::from(now.year()))
+    .fetch_one(&state.pool)
+    .await?;
+
     Ok(Json(DashboardMetrics {
-        total_pool_capital: 0,
-        total_active_loans: 0,
-        total_fines_accrued: 0,
-        group_balance: 0,
-        active_members_count: 0,
-        total_contributions_this_month: 0,
+        total_pool_capital: group.pool_balance,
+        total_active_loans,
+        total_fines_accrued,
+        group_balance: group.pool_balance - total_active_loans,
+        active_members_count,
+        total_contributions_this_month,
         pending_reconciliations: 0,
     }))
 }

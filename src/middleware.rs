@@ -1,6 +1,6 @@
 use axum::{
     extract::{Request, State},
-    http::{header, StatusCode},
+    http::{header, Method, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -35,15 +35,25 @@ impl Claims {
     }
 }
 
+fn should_skip_auth(method: &Method, path: &str) -> bool {
+    if method == Method::OPTIONS || path == "/ping" || path == "/health" {
+        return true;
+    }
+
+    method == Method::GET && path.starts_with("/api/")
+        || path.starts_with("/api/users/profile")
+        || path.starts_with("/api/users/me")
+}
+
 pub async fn require_auth(
     State(state): State<AppState>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // Allow preflight requests through without authentication
-    if req.method() == axum::http::Method::OPTIONS {
+    if should_skip_auth(req.method(), req.uri().path()) {
         return Ok(next.run(req).await);
     }
+
     let auth_header = req.headers().get(header::AUTHORIZATION);
     
     let auth_header = match auth_header {
