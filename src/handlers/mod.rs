@@ -7,6 +7,7 @@ pub mod mpesa;
 pub mod penalties;
 pub mod transactions;
 pub mod users;
+pub mod webhooks;
 
 use axum::Router;
 
@@ -27,4 +28,5 @@ pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(protected_routes)
         .nest("/mpesa", mpesa::routes())
+        .nest("/webhooks", webhooks::routes())
 }

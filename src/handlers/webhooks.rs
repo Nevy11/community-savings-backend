@@ -1,0 +1,94 @@
+use axum::{extract::State, routing::post, Json, Router};
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::{error::AppResult, AppState};
+
+pub fn routes() -> Router<AppState> {
+    Router::new().route("/supabase-auth", post(handle_supabase_auth))
+}
+
+#[derive(Debug, Deserialize)]
+struct SupabaseUser {
+    id: String,
+    email: Option<String>,
+    user_metadata: Option<Value>,
+}
+
+async fn handle_supabase_auth(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> AppResult<String> {
+    // Try to extract user object from known keys
+    let user_val = payload.get("user")
+        .or_else(|| payload.get("record"))
+        .or_else(|| payload.get("new"))
+        .unwrap_or(&payload);
+
+    let user: SupabaseUser = serde_json::from_value(user_val.clone()).map_err(|_| {
+        crate::error::AppError::BadRequest("invalid webhook payload".into())
+    })?;
+
+    let auth_user_id = uuid::Uuid::parse_str(&user.id).map_err(|_| {
+        crate::error::AppError::BadRequest("invalid user id".into())
+    })?;
+
+    let email = user.email.clone();
+
+    // derive username from metadata or email
+    let mut username = None;
+    if let Some(meta) = user.user_metadata {
+        if let Some(u) = meta.get("username").and_then(|v| v.as_str()) {
+            username = Some(u.to_string());
+        }
+        if username.is_none() {
+            if let Some(fnm) = meta.get("full_name").and_then(|v| v.as_str()) {
+                username = Some(fnm.to_lowercase().replace(' ', "_"));
+            }
+        }
+    }
+    if username.is_none() {
+        if let Some(ref e) = email {
+            if let Some(pos) = e.find('@') {
+                username = Some(e[..pos].to_string());
+            }
+        }
+    }
+
+    let username = username.unwrap_or_else(|| format!("user_{}", &auth_user_id.to_simple()[..8]));
+    let full_name = user.user_metadata.and_then(|m| m.get("full_name").and_then(|v| v.as_str()).map(|s| s.to_string()));
+
+    // Insert into users and user_profiles in a transaction
+    let mut tx = state.pool.begin().await?;
+
+    // insert into users table if not exists
+    sqlx::query(
+        "INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(auth_user_id)
+    .bind(&email)
+    .execute(&mut tx)
+    .await?;
+
+    // upsert profile
+    let profile = sqlx::query_as::<_, crate::models::user_profile::UserProfile>(
+        r#"
+        INSERT INTO user_profiles (auth_user_id, username, full_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (auth_user_id) DO UPDATE SET
+            username = EXCLUDED.username,
+            full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+            updated_at = NOW()
+        RETURNING *
+        "#,
+    )
+    .bind(auth_user_id)
+    .bind(&username)
+    .bind(&full_name)
+    .fetch_one(&mut tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok("ok".into())
+}
