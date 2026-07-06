@@ -1,6 +1,7 @@
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use base64::{engine::general_purpose, Engine as _};
 
 use crate::error::{AppError, AppResult};
 
@@ -21,8 +22,8 @@ pub fn verify_webhook_signature(payload: &str, provided_signature: &str, secret:
         }
     }
 
-    // Try base64
-    if let Ok(provided) = base64::decode(provided_signature) {
+    // Try base64 (use new Engine API)
+    if let Ok(provided) = general_purpose::STANDARD.decode(provided_signature) {
         if expected.as_slice().ct_eq(&provided).into() {
             return Ok(());
         }

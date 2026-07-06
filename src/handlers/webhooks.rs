@@ -68,7 +68,7 @@ async fn handle_supabase_auth(
 
     // derive username from metadata or email
     let mut username = None;
-    if let Some(meta) = user.user_metadata {
+    if let Some(meta) = user.user_metadata.as_ref() {
         if let Some(u) = meta.get("username").and_then(|v| v.as_str()) {
             username = Some(u.to_string());
         }
@@ -86,11 +86,12 @@ async fn handle_supabase_auth(
         }
     }
 
-    let username = username.unwrap_or_else(|| format!("user_{}", &auth_user_id.to_simple()[..8]));
-    let full_name = user.user_metadata.and_then(|m| m.get("full_name").and_then(|v| v.as_str()).map(|s| s.to_string()));
+    let username = username.unwrap_or_else(|| format!("user_{}", &auth_user_id.simple().to_string()[..8]));
+    let full_name = user.user_metadata.as_ref().and_then(|m| m.get("full_name").and_then(|v| v.as_str()).map(|s| s.to_string()));
 
     // Insert into users and user_profiles in a transaction
     let mut tx = state.pool.begin().await?;
+    let tx_ref = &mut tx;
 
     // insert into users table if not exists
     sqlx::query(
@@ -98,7 +99,7 @@ async fn handle_supabase_auth(
     )
     .bind(auth_user_id)
     .bind(&email)
-    .execute(&mut tx)
+    .execute(&mut **tx_ref)
     .await?;
 
     // upsert profile
@@ -116,7 +117,7 @@ async fn handle_supabase_auth(
     .bind(auth_user_id)
     .bind(&username)
     .bind(&full_name)
-    .fetch_one(&mut tx)
+    .fetch_one(&mut **tx_ref)
     .await?;
 
     tx.commit().await?;
@@ -143,6 +144,7 @@ async fn handshake(
     }
 
     let canonical = serde_json::to_string(&payload).map_err(|_| crate::error::AppError::BadRequest("invalid payload".into()))?;
+    println!("[webhook/handshake] canonical payload: {}", &canonical);
     crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret)?;
 
     println!("[webhook/handshake] successful signature verification");
