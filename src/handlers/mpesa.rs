@@ -16,7 +16,34 @@ use crate::{
 use super::transactions::append_ledger_in_tx;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/callback", post(mpesa_callback))
+    Router::new()
+        .route("/callback", post(mpesa_callback))
+        .route("/stkpush", post(stk_push))
+}
+
+#[derive(Deserialize)]
+pub struct StkPushRequest {
+    pub phone_number: String,
+    pub amount: i64,
+    pub group_id: uuid::Uuid,
+    pub member_id: uuid::Uuid,
+}
+
+#[derive(Serialize)]
+pub struct StkPushResponse {
+    pub checkout_request_id: String,
+    pub customer_message: String,
+}
+
+async fn stk_push(
+    State(_state): State<AppState>,
+    Json(_payload): Json<StkPushRequest>,
+) -> AppResult<Json<StkPushResponse>> {
+    // Stub implementation for now
+    Ok(Json(StkPushResponse {
+        checkout_request_id: "ws_CO_03072026_stk_1234567890".into(),
+        customer_message: "Success. Request accepted for processing".into(),
+    }))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -51,7 +78,7 @@ async fn mpesa_callback(
     mpesa::verify_mpesa_signature(
         &canonical_payload,
         signature,
-        &state.mpesa_callback_secret,
+        &state.config.mpesa_callback_secret,
     )?;
 
     validation::validate_phone_number(&payload.phone_number)?;
