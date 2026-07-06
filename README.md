@@ -18,6 +18,7 @@ Production-grade REST API for a **Community Savings Group Management System** bu
 - [Environment Variables](#environment-variables)
 - [Getting Started](#getting-started)
 - [Database & Migrations](#database--migrations)
+- [Authentication](#authentication)
 - [API Reference](#api-reference)
 - [Financial & Concurrency Rules](#financial--concurrency-rules)
 - [M-Pesa Integration](#m-pesa-integration)
@@ -31,6 +32,7 @@ Production-grade REST API for a **Community Savings Group Management System** bu
 
 | Module | Description |
 |--------|-------------|
+| **User Profiles & Auth** | Supabase JWT authentication; user profiles with username, full name, preferred theme (`light`/`dark`), and role (`member`/`administrator`). |
 | **Members & Attendance** | Onboard members, track active status, log meeting attendance. Absent/late status auto-creates attendance fines. |
 | **Transaction Ledger** | Append-only ledger for deposits, social fund payments, withdrawals, repayments, fines, and dividends. |
 | **Loans** | Request loans, assign guarantors, approve/disburse with pool balance checks and row-level locking. |
@@ -82,7 +84,8 @@ HTTP Request
 ```
 
 **Cross-cutting concerns:**
-- `config.rs` — environment variables and connection pool
+- `config.rs` — environment variables, `.env` loading, and connection pool
+- `middleware.rs` — Supabase JWT verification for protected routes
 - `error.rs` — centralized `AppError` enum mapped to HTTP status codes
 
 ---
@@ -95,17 +98,23 @@ community-savings-backend/
 ├── README.md
 ├── .env                          # Local secrets (git-ignored)
 ├── migrations/
-│   └── 001_initial_schema.sql    # Source migration
+│   ├── 001_initial_schema.sql
+│   ├── 002_add_auth_cycles_meetings.sql
+│   └── 003_user_profiles.sql
 ├── supabase/
 │   ├── config.toml
 │   └── migrations/
-│       └── 20260703120000_initial_schema.sql
+│       ├── 20260703120000_initial_schema.sql
+│       ├── 20260703172200_add_auth_cycles_meetings.sql
+│       └── 20260706114800_user_profiles.sql
 └── src/
     ├── main.rs                   # Entry point & router wiring
-    ├── config.rs                 # Env vars & DB pool
+    ├── config.rs                 # Env vars, .env loading & DB pool
+    ├── middleware.rs             # Supabase JWT auth middleware
     ├── error.rs                  # AppError → HTTP responses
     ├── handlers/
     │   ├── mod.rs
+    │   ├── users.rs              # User profiles & /me
     │   ├── members.rs            # Members & attendance
     │   ├── transactions.rs       # Append-only ledger
     │   ├── loans.rs              # Loan lifecycle
@@ -113,6 +122,7 @@ community-savings-backend/
     │   └── mpesa.rs              # M-Pesa webhook
     ├── models/
     │   ├── mod.rs
+    │   ├── user_profile.rs
     │   ├── member.rs
     │   ├── transaction.rs
     │   ├── loan.rs
@@ -140,13 +150,22 @@ community-savings-backend/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (Supabase pooler, session mode, port `5432`) |
+| `SUPABASE_JWT_SECRET` | No | JWT secret from Supabase (Project Settings → API → JWT Secret). Required for auth in production. |
 | `PORT` | No | HTTP port (default: `3000`). Render sets this automatically. |
 | `MPESA_CALLBACK_SECRET` | No | HMAC secret for M-Pesa webhook verification (default: dev placeholder) |
+| `MPESA_ENVIRONMENT` | No | `sandbox` or `production` (default: `sandbox`) |
+| `MPESA_CONSUMER_KEY` | No | M-Pesa Daraja API consumer key |
+| `MPESA_CONSUMER_SECRET` | No | M-Pesa Daraja API consumer secret |
+| `MPESA_PASSKEY` | No | M-Pesa STK Push passkey |
+| `MPESA_SHORTCODE` | No | M-Pesa business shortcode |
+
+The app automatically loads a `.env` file from the project root on startup (via `dotenvy`).
 
 ### Example `.env` (local development)
 
 ```env
 DATABASE_URL="postgresql://postgres.<project-ref>:<url-encoded-password>@aws-0-eu-west-3.pooler.supabase.com:5432/postgres"
+SUPABASE_JWT_SECRET="your-supabase-jwt-secret"
 MPESA_CALLBACK_SECRET="your-production-secret"
 ```
 
@@ -197,11 +216,25 @@ curl http://localhost:3000/health
 |-------|---------|
 | `groups` | Savings group settings, pool balance, interest rates, fine amounts |
 | `members` | Group members |
+| `user_profiles` | Authenticated user profiles (username, full name, theme, role) |
+| `users` | Legacy auth table (email/password) |
+| `cycles` | Savings group cycles |
+| `meetings` | Group meeting records |
 | `attendance_records` | Meeting attendance (present / absent / late) |
 | `ledger_transactions` | **Append-only** financial ledger |
 | `loans` | Loan requests and lifecycle |
 | `loan_guarantors` | Guarantor assignments per loan |
 | `penalties` | Assessed fines (attendance & loan late fees) |
+
+### `user_profiles` columns
+
+| Column | Type | Default | Description |
+|--------|------|---------|-------------|
+| `auth_user_id` | UUID | — | Supabase Auth user ID (JWT `sub`) |
+| `username` | TEXT | — | Unique username (3–32 chars) |
+| `full_name` | TEXT | null | Display name (from sign-in metadata or API) |
+| `preferred_theme` | `light` \| `dark` | `light` | UI theme preference |
+| `role` | `administrator` \| `member` | `member` | Access level |
 
 ### Apply migrations (Supabase CLI)
 
@@ -224,6 +257,23 @@ supabase db query --linked "SELECT table_name FROM information_schema.tables WHE
 
 ---
 
+## Authentication
+
+Most `/api/*` routes are **protected** and require a valid Supabase access token:
+
+```
+Authorization: Bearer <supabase_access_token>
+```
+
+The middleware validates the JWT against `SUPABASE_JWT_SECRET` and extracts the authenticated user's ID (`sub`), email, and metadata (including `full_name` from `user_metadata`).
+
+**Public routes** (no auth required):
+- `GET /ping`
+- `GET /health`
+- `POST /api/mpesa/callback`
+
+---
+
 ## API Reference
 
 Base URL: `https://community-savings-backend.onrender.com`
@@ -240,6 +290,105 @@ All `/api/*` endpoints return JSON. Errors follow:
 |--------|------|-------------|
 | `GET` | `/ping` | Simple liveness check → `pong` |
 | `GET` | `/health` | JSON health status |
+
+---
+
+### User Profiles — `/api/users`
+
+Requires `Authorization: Bearer <token>`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/users/profile` | Create or sync profile after Supabase sign-in |
+| `GET` | `/api/users/profile/{username}` | Fetch profile by username |
+| `GET` | `/api/users/me` | Fetch current user's profile (by JWT `sub`) |
+| `PATCH` | `/api/users/profile` | Update profile (theme, full name) |
+
+**Profile response shape:**
+
+```json
+{
+  "id": "uuid",
+  "username": "jane_doe",
+  "full_name": "Jane Doe",
+  "preferred_theme": "light",
+  "role": "member",
+  "email": "jane@example.com"
+}
+```
+
+**Create / sync profile after sign-in:**
+
+```json
+POST /api/users/profile
+{
+  "username": "jane_doe",
+  "full_name": "Jane Doe"
+}
+```
+
+- `username` — required (3–32 chars; letters, numbers, `_`, `.`)
+- `full_name` — optional; if omitted, read from JWT `user_metadata.full_name` or `user_metadata.name`
+
+**Fetch profile by username:**
+
+```
+GET /api/users/profile/jane_doe
+```
+
+Access rules:
+- Users can fetch their **own** profile
+- Users with `role: "administrator"` can fetch **any** profile
+
+**Update profile (e.g. theme toggle):**
+
+```json
+PATCH /api/users/profile
+{
+  "preferred_theme": "dark",
+  "full_name": "Jane M. Doe"
+}
+```
+
+Both fields are optional — send only what you want to change.
+
+**Defaults for new profiles:**
+- `preferred_theme` → `"light"`
+- `role` → `"member"`
+
+**Frontend flow:**
+
+1. User signs in via Supabase Auth on the client
+2. Call `POST /api/users/profile` with `username` (and optionally `full_name`)
+3. On app load, call `GET /api/users/profile/{username}` or `GET /api/users/me`
+4. Apply `preferred_theme` and `role` to the UI
+5. Use `PATCH /api/users/profile` when the user changes theme settings
+
+**Example (JavaScript):**
+
+```javascript
+const { data: { session } } = await supabase.auth.getSession();
+const token = session.access_token;
+
+// Sync profile after sign-in
+await fetch(`${API_BASE}/api/users/profile`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    username: 'jane_doe',
+    full_name: session.user.user_metadata?.full_name,
+  }),
+});
+
+// Fetch profile
+const res = await fetch(`${API_BASE}/api/users/profile/jane_doe`, {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const profile = await res.json();
+```
 
 ---
 
@@ -462,6 +611,7 @@ Two methods computed per group settings:
 | Key | Value |
 |-----|-------|
 | `DATABASE_URL` | Supabase PostgreSQL connection string (URL-encode password) |
+| `SUPABASE_JWT_SECRET` | Supabase JWT secret (Project Settings → API) |
 | `MPESA_CALLBACK_SECRET` | Production HMAC secret |
 
 Render sets `PORT` automatically. The app binds to `0.0.0.0:$PORT`.
@@ -492,6 +642,7 @@ Unit tests in `services/finance.rs` cover flat-rate interest and dividend share 
 - **Never commit `.env`** — it is listed in `.gitignore`.
 - Store production secrets only in Render environment variables or a secrets manager.
 - Rotate database passwords and API secrets if they are ever exposed.
+- Protected API routes require a valid Supabase JWT; unauthenticated requests receive `401`.
 - M-Pesa callbacks are rejected without a valid `x-mpesa-signature` header.
 - Use HTTPS in production (Render provides this by default).
 
