@@ -5,7 +5,9 @@ use serde_json::Value;
 use crate::{error::AppResult, AppState};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/supabase-auth", post(handle_supabase_auth))
+    Router::new()
+        .route("/supabase-auth", post(handle_supabase_auth))
+        .route("/supabase-auth/handshake", post(handshake))
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,19 +23,33 @@ async fn handle_supabase_auth(
     Json(payload): Json<Value>,
 ) -> AppResult<String> {
     // Verify signature
-    let signature = headers
+    let signature = match headers
         .get("x-hook-signature")
         .or_else(|| headers.get("x-supabase-signature"))
         .or_else(|| headers.get("x-signature"))
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| crate::error::AppError::Unauthorized("missing webhook signature".into()))?;
+    {
+        Some(s) => s,
+        None => {
+            eprintln!("[webhook] missing signature header; headers: {:?}", headers);
+            return Err(crate::error::AppError::Unauthorized("missing webhook signature".into()));
+        }
+    };
 
     if state.config.supabase_webhook_secret.is_empty() {
+        eprintln!("[webhook] SUPABASE_WEBHOOK_SECRET not configured");
         return Err(crate::error::AppError::Unauthorized("webhook secret not configured".into()));
     }
 
-    let canonical = serde_json::to_string(&payload).map_err(|_| crate::error::AppError::BadRequest("invalid payload".into()))?;
-    crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret)?;
+    let canonical = serde_json::to_string(&payload).map_err(|_| {
+        eprintln!("[webhook] failed to serialize payload for signature verification");
+        crate::error::AppError::BadRequest("invalid payload".into())
+    })?;
+
+    if let Err(err) = crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret) {
+        eprintln!("[webhook] signature verification failed: {:?}; signature: {}", err, signature);
+        return Err(err);
+    }
     // Try to extract user object from known keys
     let user_val = payload.get("user")
         .or_else(|| payload.get("record"))
@@ -106,4 +122,29 @@ async fn handle_supabase_auth(
     tx.commit().await?;
 
     Ok("ok".into())
+}
+
+async fn handshake(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> AppResult<String> {
+    // Simple handshake: verify signature and return ok
+    let signature = headers
+        .get("x-hook-signature")
+        .or_else(|| headers.get("x-supabase-signature"))
+        .or_else(|| headers.get("x-signature"))
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| crate::error::AppError::Unauthorized("missing webhook signature".into()))?;
+
+    if state.config.supabase_webhook_secret.is_empty() {
+        eprintln!("[webhook/handshake] SUPABASE_WEBHOOK_SECRET not configured");
+        return Err(crate::error::AppError::Unauthorized("webhook secret not configured".into()));
+    }
+
+    let canonical = serde_json::to_string(&payload).map_err(|_| crate::error::AppError::BadRequest("invalid payload".into()))?;
+    crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret)?;
+
+    println!("[webhook/handshake] successful signature verification");
+    Ok("handshake ok".into())
 }
