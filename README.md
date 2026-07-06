@@ -1,263 +1,97 @@
 # Community Savings Backend
 
-Production-grade REST API for a **Community Savings Group Management System** built on the **ASCA** (Accumulating Savings and Credit Association) model. The API powers member onboarding, contributions, loans, penalties, dividends, and M-Pesa payment reconciliation.
+This backend powers the Community Savings / Chama platform with a Rust API for member management, contributions, loans, penalties, and M-Pesa integration.
 
-**Live API:** [https://community-savings-backend.onrender.com](https://community-savings-backend.onrender.com)
+## What this service does
 
-**Database:** [Supabase](https://yzbpzkhxtdlwhiyjehel.supabase.co) (PostgreSQL)
+- Exposes a JSON API for the Angular frontend
+- Authenticates requests using Supabase JWTs
+- Stores user profiles, members, transactions, loans, and penalties
+- Supports group-level financial operations and basic dashboard metrics
+- Provides endpoints for M-Pesa STK push and webhook handling
 
----
+## Tech stack
 
-## Table of Contents
+- Rust 2024 edition
+- Axum web framework
+- SQLx + PostgreSQL
+- Supabase Auth integration
+- Serde / JSON
 
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Environment Variables](#environment-variables)
-- [Getting Started](#getting-started)
-- [Database & Migrations](#database--migrations)
-- [Authentication](#authentication)
-- [API Reference](#api-reference)
-- [Financial & Concurrency Rules](#financial--concurrency-rules)
-- [M-Pesa Integration](#m-pesa-integration)
-- [Deployment (Render)](#deployment-render)
-- [Testing](#testing)
-- [Security Notes](#security-notes)
+## Project layout
 
----
-
-## Features
-
-| Module | Description |
-|--------|-------------|
-| **User Profiles & Auth** | Supabase JWT authentication; user profiles with username, full name, preferred theme (`light`/`dark`), and role (`member`/`administrator`). |
-| **Members & Attendance** | Onboard members, track active status, log meeting attendance. Absent/late status auto-creates attendance fines. |
-| **Transaction Ledger** | Append-only ledger for deposits, social fund payments, withdrawals, repayments, fines, and dividends. |
-| **Loans** | Request loans, assign guarantors, approve/disburse with pool balance checks and row-level locking. |
-| **Penalties** | Calculate and apply stacked or fixed-rate penalties for late loan repayments. |
-| **Finance Engine** | Flat-rate and reducing-balance amortization; time-weighted dividend distribution. |
-| **M-Pesa Gateway** | Webhook callback with HMAC signature verification and automatic ledger entries. |
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Language | Rust (edition 2024) |
-| Web framework | [Axum](https://github.com/tokio-rs/axum) 0.8 |
-| Database | PostgreSQL via [SQLx](https://github.com/launchbadge/sqlx) 0.8 |
-| Hosting | [Render](https://render.com) |
-| Database host | [Supabase](https://supabase.com) |
-| Serialization | Serde / JSON |
-
----
-
-## Architecture
-
-The codebase follows a **modular, layered architecture** — no monolithic `main.rs`.
-
-```
-HTTP Request
-     │
-     ▼
-┌─────────────┐
-│  handlers/  │  Route handlers, extractors, HTTP responses
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  services/  │  Business logic (finance math, validation, M-Pesa)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   models/   │  Database schemas & request/response types
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  PostgreSQL │  Supabase (append-only ledger, row locks)
-└─────────────┘
-```
-
-**Cross-cutting concerns:**
-- `config.rs` — environment variables, `.env` loading, and connection pool
-- `middleware.rs` — Supabase JWT verification for protected routes
-- `error.rs` — centralized `AppError` enum mapped to HTTP status codes
-
----
-
-## Project Structure
-
-```
-community-savings-backend/
-├── Cargo.toml
-├── README.md
-├── .env                          # Local secrets (git-ignored)
-├── migrations/
-│   ├── 001_initial_schema.sql
-│   ├── 002_add_auth_cycles_meetings.sql
-│   └── 003_user_profiles.sql
-├── supabase/
-│   ├── config.toml
-│   └── migrations/
-│       ├── 20260703120000_initial_schema.sql
-│       ├── 20260703172200_add_auth_cycles_meetings.sql
-│       └── 20260706114800_user_profiles.sql
-└── src/
-    ├── main.rs                   # Entry point & router wiring
-    ├── config.rs                 # Env vars, .env loading & DB pool
-    ├── middleware.rs             # Supabase JWT auth middleware
-    ├── error.rs                  # AppError → HTTP responses
-    ├── handlers/
-    │   ├── mod.rs
-    │   ├── users.rs              # User profiles & /me
-    │   ├── members.rs            # Members & attendance
-    │   ├── transactions.rs       # Append-only ledger
-    │   ├── loans.rs              # Loan lifecycle
-    │   ├── penalties.rs          # Fine calculation & application
-    │   └── mpesa.rs              # M-Pesa webhook
-    ├── models/
-    │   ├── mod.rs
-    │   ├── user_profile.rs
-    │   ├── member.rs
-    │   ├── transaction.rs
-    │   ├── loan.rs
-    │   ├── group.rs
-    │   └── penalty.rs
-    └── services/
-        ├── mod.rs
-        ├── finance.rs            # Amortization & dividend math
-        ├── validation.rs         # Input validation
-        └── mpesa.rs              # Signature verification
-```
-
----
+- src/main.rs — app entry point and router setup
+- src/handlers/ — HTTP handlers for users, groups, members, transactions, loans, penalties, and M-Pesa
+- src/models/ — request and response models
+- src/services/ — finance, validation, and payment logic
+- src/middleware.rs — JWT authentication middleware
+- src/config.rs — environment and database configuration
 
 ## Prerequisites
 
-- **Rust** 1.85+ ([rustup](https://rustup.rs))
-- **Supabase CLI** (optional, for migrations): `npm install -g supabase`
-- **PostgreSQL client** (optional): for manual SQL queries
+- Rust and Cargo
+- A PostgreSQL-compatible database (Supabase is used in this project)
+- Environment variables configured in a .env file
 
----
+## Environment variables
 
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string (Supabase pooler, session mode, port `5432`) |
-| `SUPABASE_JWT_SECRET` | No | JWT secret from Supabase (Project Settings → API → JWT Secret). Required for auth in production. |
-| `PORT` | No | HTTP port (default: `3000`). Render sets this automatically. |
-| `MPESA_CALLBACK_SECRET` | No | HMAC secret for M-Pesa webhook verification (default: dev placeholder) |
-| `MPESA_ENVIRONMENT` | No | `sandbox` or `production` (default: `sandbox`) |
-| `MPESA_CONSUMER_KEY` | No | M-Pesa Daraja API consumer key |
-| `MPESA_CONSUMER_SECRET` | No | M-Pesa Daraja API consumer secret |
-| `MPESA_PASSKEY` | No | M-Pesa STK Push passkey |
-| `MPESA_SHORTCODE` | No | M-Pesa business shortcode |
-
-The app automatically loads a `.env` file from the project root on startup (via `dotenvy`).
-
-### Example `.env` (local development)
+Create a .env file in the backend root with values like:
 
 ```env
-DATABASE_URL="postgresql://postgres.<project-ref>:<url-encoded-password>@aws-0-eu-west-3.pooler.supabase.com:5432/postgres"
-SUPABASE_JWT_SECRET="your-supabase-jwt-secret"
-MPESA_CALLBACK_SECRET="your-production-secret"
+DATABASE_URL="postgresql://..."
+SUPABASE_JWT_SECRET="your-jwt-secret"
+PORT=3000
+MPESA_CALLBACK_SECRET="dev-secret"
+MPESA_ENVIRONMENT="sandbox"
+MPESA_CONSUMER_KEY=""
+MPESA_CONSUMER_SECRET=""
+MPESA_PASSKEY=""
+MPESA_SHORTCODE=""
 ```
 
-> **Important:** If your database password contains special characters (`@`, `#`, `%`, etc.), they must be [URL-encoded](https://developer.mozilla.org/en-US/docs/Glossary/Percent-encoding) in `DATABASE_URL`. For example, `@` becomes `%40`.
-
-Get your connection details from **Supabase Dashboard → Project Settings → Database**.
-
----
-
-## Getting Started
-
-### 1. Clone and install dependencies
-
-```bash
-git clone <repository-url>
-cd community-savings-backend
-```
-
-### 2. Configure environment
-
-Create a `.env` file in the project root (see [Environment Variables](#environment-variables)).
-
-### 3. Run the server
+## Run locally
 
 ```bash
 cargo run
 ```
 
-The server binds to `0.0.0.0` on the configured port.
-
-### 4. Verify
+Health checks:
 
 ```bash
 curl http://localhost:3000/ping
-# pong
-
 curl http://localhost:3000/health
-# {"status":"ok"}
 ```
 
----
+## Main API areas
 
-## Database & Migrations
-
-### Schema overview
-
-| Table | Purpose |
-|-------|---------|
-| `groups` | Savings group settings, pool balance, interest rates, fine amounts |
-| `members` | Group members |
-| `user_profiles` | Authenticated user profiles (username, full name, theme, role) |
-| `users` | Legacy auth table (email/password) |
-| `cycles` | Savings group cycles |
-| `meetings` | Group meeting records |
-| `attendance_records` | Meeting attendance (present / absent / late) |
-| `ledger_transactions` | **Append-only** financial ledger |
-| `loans` | Loan requests and lifecycle |
-| `loan_guarantors` | Guarantor assignments per loan |
-| `penalties` | Assessed fines (attendance & loan late fees) |
-
-### `user_profiles` columns
-
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `auth_user_id` | UUID | — | Supabase Auth user ID (JWT `sub`) |
-| `username` | TEXT | — | Unique username (3–32 chars) |
-| `full_name` | TEXT | null | Display name (from sign-in metadata or API) |
-| `preferred_theme` | `light` \| `dark` | `light` | UI theme preference |
-| `role` | `administrator` \| `member` | `member` | Access level |
-
-### Apply migrations (Supabase CLI)
-
-```bash
-# Login (one-time)
-supabase login
-
-# Link to your project
-supabase link --project-ref yzbpzkhxtdlwhiyjehel
-
-# Push migrations to remote database
-supabase db push
-```
-
-### Verify tables
-
-```bash
-supabase db query --linked "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;"
-```
-
----
+- /api/users — profile creation and profile lookup
+- /api/members — member onboarding and attendance
+- /api/transactions — append-only ledger operations
+- /api/loans — loan request, approval, and disbursement flow
+- /api/groups — group settings and dashboard metrics
+- /api/mpesa — STK push and webhook endpoints
 
 ## Authentication
+
+Protected routes expect a bearer token:
+
+```http
+Authorization: Bearer <supabase-access-token>
+```
+
+The backend validates the token and uses the Supabase user id from the JWT subject claim.
+
+## Testing
+
+```bash
+cargo test
+```
+
+## Notes
+
+- The frontend currently calls the backend through the /api routes.
+- The backend is designed to work with the deployed Render instance and the Supabase PostgreSQL database.
+
 
 Most `/api/*` routes are **protected** and require a valid Supabase access token:
 
