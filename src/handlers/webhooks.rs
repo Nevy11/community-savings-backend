@@ -1,4 +1,4 @@
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -17,8 +17,23 @@ struct SupabaseUser {
 
 async fn handle_supabase_auth(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> AppResult<String> {
+    // Verify signature
+    let signature = headers
+        .get("x-hook-signature")
+        .or_else(|| headers.get("x-supabase-signature"))
+        .or_else(|| headers.get("x-signature"))
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| crate::error::AppError::Unauthorized("missing webhook signature".into()))?;
+
+    if state.config.supabase_webhook_secret.is_empty() {
+        return Err(crate::error::AppError::Unauthorized("webhook secret not configured".into()));
+    }
+
+    let canonical = serde_json::to_string(&payload).map_err(|_| crate::error::AppError::BadRequest("invalid payload".into()))?;
+    crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret)?;
     // Try to extract user object from known keys
     let user_val = payload.get("user")
         .or_else(|| payload.get("record"))
