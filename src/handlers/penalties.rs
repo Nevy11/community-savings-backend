@@ -143,6 +143,7 @@ async fn apply_penalty(
     Ok(Json(penalty))
 }
 
+#[allow(dead_code)]
 pub async fn create_loan_late_penalty(
     state: &AppState,
     loan_id: Uuid,

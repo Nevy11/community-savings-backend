@@ -59,13 +59,14 @@ impl AppConfig {
             .next()
             .unwrap_or_default();
 
-        let port = host_part
-            .rsplit(':')
-            .next()
-            .ok_or_else(|| "missing port".to_string())?;
-
-        port.parse::<u16>()
-            .map_err(|_| format!("invalid port '{port}' (use 5432 for Supabase session pooler)"))?;
+        // Extract port from host:port format
+        if let Some(port_str) = host_part.rsplit(':').next() {
+            // Only validate if there's actually a port part
+            if !port_str.is_empty() && port_str.chars().all(|c| c.is_ascii_digit()) {
+                port_str.parse::<u16>()
+                    .map_err(|_| format!("invalid port '{port_str}' (use 5432 for Supabase session pooler)"))?;
+            }
+        }
 
         Ok(())
     }

@@ -12,6 +12,7 @@ pub struct AmortizationQuote {
     pub total_interest: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DividendShare {
     pub member_id: uuid::Uuid,
@@ -19,6 +20,7 @@ pub struct DividendShare {
     pub share_amount: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ContributionWeight {
     pub member_id: uuid::Uuid,
@@ -159,6 +161,7 @@ pub fn quote_for_method(
 
 /// Dividend Share = (member_weight / total_weight) × distributable_pool
 /// member_weight = Σ(contribution_amount × months_held)
+#[allow(dead_code)]
 pub fn time_weighted_dividend_shares(
     contributions: &[ContributionWeight],
     distributable_pool: i64,

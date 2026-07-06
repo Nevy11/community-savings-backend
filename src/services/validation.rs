@@ -10,6 +10,7 @@ pub fn validate_positive_amount(amount: i64, field: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn validate_non_negative_amount(amount: i64, field: &str) -> AppResult<()> {
     if amount < 0 {
         return Err(AppError::BadRequest(format!(
@@ -49,6 +50,7 @@ pub fn validate_username(username: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn validate_meeting_day(day: i32) -> AppResult<()> {
     if !(0..=6).contains(&day) {
         return Err(AppError::BadRequest(
