@@ -26,6 +26,8 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() {
+    let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
+
     let config = AppConfig::from_env();
     let pool = create_pool(&config.database_url)
         .await
