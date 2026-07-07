@@ -1,19 +1,19 @@
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     routing::{get, post},
-    Extension, Json, Router,
 };
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
+    AppState,
     error::{AppError, AppResult},
     middleware::Claims,
     models::user_profile::{
         CreateUserProfileRequest, UpdateUserProfileRequest, UserProfile, UserRole, UserTheme,
     },
     services::validation,
-    AppState,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -61,12 +61,11 @@ async fn load_requester_profile(
     claims: &Claims,
 ) -> AppResult<Option<UserProfile>> {
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
-    let profile = sqlx::query_as::<_, UserProfile>(
-        "SELECT * FROM user_profiles WHERE auth_user_id = $1",
-    )
-    .bind(auth_user_id)
-    .fetch_optional(pool)
-    .await?;
+    let profile =
+        sqlx::query_as::<_, UserProfile>("SELECT * FROM user_profiles WHERE auth_user_id = $1")
+            .bind(auth_user_id)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(profile)
 }
@@ -98,13 +97,12 @@ pub async fn get_profile_by_username(
     Extension(claims): Extension<Claims>,
     Path(username): Path<String>,
 ) -> AppResult<Json<UserProfileResponse>> {
-    let profile = sqlx::query_as::<_, UserProfile>(
-        "SELECT * FROM user_profiles WHERE username = $1",
-    )
-    .bind(&username)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let profile =
+        sqlx::query_as::<_, UserProfile>("SELECT * FROM user_profiles WHERE username = $1")
+            .bind(&username)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let requester = load_requester_profile(&state.pool, &claims).await?;
     authorize_profile_access(&claims, &profile, requester.as_ref())?;
@@ -118,13 +116,12 @@ pub async fn get_me(
 ) -> AppResult<Json<UserProfileResponse>> {
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
 
-    let profile = sqlx::query_as::<_, UserProfile>(
-        "SELECT * FROM user_profiles WHERE auth_user_id = $1",
-    )
-    .bind(auth_user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let profile =
+        sqlx::query_as::<_, UserProfile>("SELECT * FROM user_profiles WHERE auth_user_id = $1")
+            .bind(auth_user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     Ok(Json(to_response(profile, claims.email)))
 }
@@ -138,14 +135,16 @@ pub async fn upsert_profile(
 
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
     let full_name = payload.full_name.or_else(|| claims.full_name());
+    let role = payload.role.unwrap_or(UserRole::Administrator);
 
     let profile = sqlx::query_as::<_, UserProfile>(
         r#"
-        INSERT INTO user_profiles (auth_user_id, username, full_name)
-        VALUES ($1, $2, $3)
+        INSERT INTO user_profiles (auth_user_id, username, full_name, role)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (auth_user_id) DO UPDATE SET
             username = EXCLUDED.username,
             full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+            role = EXCLUDED.role,
             updated_at = NOW()
         RETURNING *
         "#,
@@ -153,10 +152,13 @@ pub async fn upsert_profile(
     .bind(auth_user_id)
     .bind(&payload.username)
     .bind(&full_name)
+    .bind(role)
     .fetch_one(&state.pool)
     .await
     .map_err(|err| match err {
-        sqlx::Error::Database(db_err) if db_err.constraint() == Some("user_profiles_username_key") => {
+        sqlx::Error::Database(db_err)
+            if db_err.constraint() == Some("user_profiles_username_key") =>
+        {
             AppError::Conflict("username is already taken".into())
         }
         other => AppError::from(other),
@@ -172,13 +174,12 @@ pub async fn update_profile(
 ) -> AppResult<Json<UserProfileResponse>> {
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
 
-    let existing = sqlx::query_as::<_, UserProfile>(
-        "SELECT * FROM user_profiles WHERE auth_user_id = $1",
-    )
-    .bind(auth_user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let existing =
+        sqlx::query_as::<_, UserProfile>("SELECT * FROM user_profiles WHERE auth_user_id = $1")
+            .bind(auth_user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let full_name = payload.full_name.or(existing.full_name);
     let preferred_theme = payload.preferred_theme.unwrap_or(existing.preferred_theme);

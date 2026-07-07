@@ -1,8 +1,8 @@
-use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{error::AppResult, AppState};
+use crate::{AppState, error::AppResult, models::user_profile::UserRole};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -32,13 +32,17 @@ async fn handle_supabase_auth(
         Some(s) => s,
         None => {
             eprintln!("[webhook] missing signature header; headers: {:?}", headers);
-            return Err(crate::error::AppError::Unauthorized("missing webhook signature".into()));
+            return Err(crate::error::AppError::Unauthorized(
+                "missing webhook signature".into(),
+            ));
         }
     };
 
     if state.config.supabase_webhook_secret.is_empty() {
         eprintln!("[webhook] SUPABASE_WEBHOOK_SECRET not configured");
-        return Err(crate::error::AppError::Unauthorized("webhook secret not configured".into()));
+        return Err(crate::error::AppError::Unauthorized(
+            "webhook secret not configured".into(),
+        ));
     }
 
     let canonical = serde_json::to_string(&payload).map_err(|_| {
@@ -46,23 +50,29 @@ async fn handle_supabase_auth(
         crate::error::AppError::BadRequest("invalid payload".into())
     })?;
 
-    if let Err(err) = crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret) {
-        eprintln!("[webhook] signature verification failed: {:?}; signature: {}", err, signature);
+    if let Err(err) = crate::services::webhook::verify_webhook_signature(
+        &canonical,
+        signature,
+        &state.config.supabase_webhook_secret,
+    ) {
+        eprintln!(
+            "[webhook] signature verification failed: {:?}; signature: {}",
+            err, signature
+        );
         return Err(err);
     }
     // Try to extract user object from known keys
-    let user_val = payload.get("user")
+    let user_val = payload
+        .get("user")
         .or_else(|| payload.get("record"))
         .or_else(|| payload.get("new"))
         .unwrap_or(&payload);
 
-    let user: SupabaseUser = serde_json::from_value(user_val.clone()).map_err(|_| {
-        crate::error::AppError::BadRequest("invalid webhook payload".into())
-    })?;
+    let user: SupabaseUser = serde_json::from_value(user_val.clone())
+        .map_err(|_| crate::error::AppError::BadRequest("invalid webhook payload".into()))?;
 
-    let auth_user_id = uuid::Uuid::parse_str(&user.id).map_err(|_| {
-        crate::error::AppError::BadRequest("invalid user id".into())
-    })?;
+    let auth_user_id = uuid::Uuid::parse_str(&user.id)
+        .map_err(|_| crate::error::AppError::BadRequest("invalid user id".into()))?;
 
     let email = user.email.clone();
 
@@ -86,30 +96,43 @@ async fn handle_supabase_auth(
         }
     }
 
-    let username = username.unwrap_or_else(|| format!("user_{}", &auth_user_id.simple().to_string()[..8]));
-    let full_name = user.user_metadata.as_ref().and_then(|m| m.get("full_name").and_then(|v| v.as_str()).map(|s| s.to_string()));
+    let username =
+        username.unwrap_or_else(|| format!("user_{}", &auth_user_id.simple().to_string()[..8]));
+    let full_name = user.user_metadata.as_ref().and_then(|m| {
+        m.get("full_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+    let role = match user
+        .user_metadata
+        .as_ref()
+        .and_then(|m| m.get("role"))
+        .and_then(|v| v.as_str())
+    {
+        Some("member") => UserRole::Member,
+        _ => UserRole::Administrator,
+    };
 
     // Insert into users and user_profiles in a transaction
     let mut tx = state.pool.begin().await?;
     let tx_ref = &mut tx;
 
     // insert into users table if not exists
-    sqlx::query(
-        "INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-    )
-    .bind(auth_user_id)
-    .bind(&email)
-    .execute(&mut **tx_ref)
-    .await?;
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING")
+        .bind(auth_user_id)
+        .bind(&email)
+        .execute(&mut **tx_ref)
+        .await?;
 
     // upsert profile
-    let profile = sqlx::query_as::<_, crate::models::user_profile::UserProfile>(
+    let _profile = sqlx::query_as::<_, crate::models::user_profile::UserProfile>(
         r#"
-        INSERT INTO user_profiles (auth_user_id, username, full_name)
-        VALUES ($1, $2, $3)
+        INSERT INTO user_profiles (auth_user_id, username, full_name, role)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (auth_user_id) DO UPDATE SET
             username = EXCLUDED.username,
             full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+            role = EXCLUDED.role,
             updated_at = NOW()
         RETURNING *
         "#,
@@ -117,6 +140,7 @@ async fn handle_supabase_auth(
     .bind(auth_user_id)
     .bind(&username)
     .bind(&full_name)
+    .bind(role)
     .fetch_one(&mut **tx_ref)
     .await?;
 
@@ -140,12 +164,19 @@ async fn handshake(
 
     if state.config.supabase_webhook_secret.is_empty() {
         eprintln!("[webhook/handshake] SUPABASE_WEBHOOK_SECRET not configured");
-        return Err(crate::error::AppError::Unauthorized("webhook secret not configured".into()));
+        return Err(crate::error::AppError::Unauthorized(
+            "webhook secret not configured".into(),
+        ));
     }
 
-    let canonical = serde_json::to_string(&payload).map_err(|_| crate::error::AppError::BadRequest("invalid payload".into()))?;
+    let canonical = serde_json::to_string(&payload)
+        .map_err(|_| crate::error::AppError::BadRequest("invalid payload".into()))?;
     println!("[webhook/handshake] canonical payload: {}", &canonical);
-    crate::services::webhook::verify_webhook_signature(&canonical, signature, &state.config.supabase_webhook_secret)?;
+    crate::services::webhook::verify_webhook_signature(
+        &canonical,
+        signature,
+        &state.config.supabase_webhook_secret,
+    )?;
 
     println!("[webhook/handshake] successful signature verification");
     Ok("handshake ok".into())

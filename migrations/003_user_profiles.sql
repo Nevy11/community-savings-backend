@@ -7,7 +7,7 @@ CREATE TABLE user_profiles (
     username TEXT UNIQUE NOT NULL,
     full_name TEXT,
     preferred_theme user_theme NOT NULL DEFAULT 'light',
-    role user_role NOT NULL DEFAULT 'member',
+    role user_role NOT NULL DEFAULT 'administrator',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

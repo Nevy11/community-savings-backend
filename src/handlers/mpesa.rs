@@ -22,6 +22,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct StkPushRequest {
     pub phone_number: String,
     pub amount: i64,

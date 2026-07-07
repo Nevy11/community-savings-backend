@@ -35,6 +35,7 @@ pub struct UserProfile {
 pub struct CreateUserProfileRequest {
     pub username: String,
     pub full_name: Option<String>,
+    pub role: Option<UserRole>,
 }
 
 #[derive(Debug, Deserialize)]

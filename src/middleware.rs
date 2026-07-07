@@ -1,13 +1,13 @@
 use axum::{
     extract::{Request, State},
-    http::{header, Method, StatusCode},
+    http::{Method, header},
     middleware::Next,
     response::Response,
 };
-use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
+use crate::{AppState, error::AppError};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserMetadata {
@@ -27,11 +27,9 @@ pub struct Claims {
 
 impl Claims {
     pub fn full_name(&self) -> Option<String> {
-        self.user_metadata.as_ref().and_then(|meta| {
-            meta.full_name
-                .clone()
-                .or_else(|| meta.name.clone())
-        })
+        self.user_metadata
+            .as_ref()
+            .and_then(|meta| meta.full_name.clone().or_else(|| meta.name.clone()))
     }
 }
 
@@ -43,20 +41,31 @@ pub async fn require_auth(
     State(state): State<AppState>,
     mut req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, AppError> {
     if should_skip_auth(req.method(), req.uri().path()) {
         return Ok(next.run(req).await);
     }
 
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
     let auth_header = req.headers().get(header::AUTHORIZATION);
-    
+
     let auth_header = match auth_header {
-        Some(header) => header.to_str().map_err(|_| StatusCode::UNAUTHORIZED)?,
-        None => return Err(StatusCode::UNAUTHORIZED),
+        Some(header) => header.to_str().map_err(|_| {
+            eprintln!("[auth] invalid authorization header encoding for {method} {path}");
+            AppError::Unauthorized("invalid authorization header".into())
+        })?,
+        None => {
+            eprintln!("[auth] missing authorization header for {method} {path}");
+            return Err(AppError::Unauthorized(
+                "missing authorization header".into(),
+            ));
+        }
     };
 
     if !auth_header.starts_with("Bearer ") {
-        return Err(StatusCode::UNAUTHORIZED);
+        eprintln!("[auth] authorization header is not bearer for {method} {path}");
+        return Err(AppError::Unauthorized("expected bearer token".into()));
     }
 
     let token = &auth_header[7..];
@@ -70,7 +79,12 @@ pub async fn require_auth(
         &validation,
     ) {
         Ok(c) => c,
-        Err(_) => return Err(StatusCode::UNAUTHORIZED),
+        Err(err) => {
+            eprintln!("[auth] jwt validation failed for {method} {path}: {err}");
+            return Err(AppError::Unauthorized(
+                "invalid or expired access token".into(),
+            ));
+        }
     };
 
     // Insert claims into request extensions for handlers to use
