@@ -50,6 +50,26 @@ fn parse_auth_user_id(sub: &str) -> AppResult<Uuid> {
     Uuid::parse_str(sub).map_err(|_| AppError::BadRequest("invalid auth user id".into()))
 }
 
+fn username_from_claims(claims: &Claims) -> Option<String> {
+    claims
+        .user_metadata
+        .as_ref()
+        .and_then(|meta| meta.username.clone())
+        .or_else(|| {
+            claims
+                .email
+                .as_ref()
+                .and_then(|email| email.split('@').next())
+                .map(|username| username.to_lowercase())
+        })
+        .map(|username| {
+            validation::normalize_username_candidate(
+                &username,
+                &claims.sub.replace('-', ""),
+            )
+        })
+}
+
 fn to_response(profile: UserProfile, email: Option<String>) -> UserProfileResponse {
     let mut response = UserProfileResponse::from(profile);
     response.email = email;
@@ -116,12 +136,46 @@ pub async fn get_me(
 ) -> AppResult<Json<UserProfileResponse>> {
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
 
-    let profile =
-        sqlx::query_as::<_, UserProfile>("SELECT * FROM user_profiles WHERE auth_user_id = $1")
+    let profile = match sqlx::query_as::<_, UserProfile>(
+        "SELECT * FROM user_profiles WHERE auth_user_id = $1",
+    )
+    .bind(auth_user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    {
+        Some(profile) => profile,
+        None => {
+            let username = username_from_claims(&claims)
+                .ok_or_else(|| AppError::BadRequest("username is required".into()))?;
+            validation::validate_username(&username)?;
+
+            sqlx::query_as::<_, UserProfile>(
+                r#"
+                INSERT INTO user_profiles (auth_user_id, username, full_name, role)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (auth_user_id) DO UPDATE SET
+                    username = EXCLUDED.username,
+                    full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+                    updated_at = NOW()
+                RETURNING *
+                "#,
+            )
             .bind(auth_user_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?;
+            .bind(&username)
+            .bind(claims.full_name())
+            .bind(UserRole::Administrator)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|err| match err {
+                sqlx::Error::Database(db_err)
+                    if db_err.constraint() == Some("user_profiles_username_key") =>
+                {
+                    AppError::Conflict("username is already taken".into())
+                }
+                other => AppError::from(other),
+            })?
+        }
+    };
 
     Ok(Json(to_response(profile, claims.email)))
 }

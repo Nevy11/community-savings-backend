@@ -50,6 +50,34 @@ pub fn validate_username(username: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub fn normalize_username_candidate(candidate: &str, fallback_suffix: &str) -> String {
+    let mut username = candidate
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    username = username
+        .trim_matches(|c| c == '_' || c == '.')
+        .chars()
+        .take(32)
+        .collect();
+
+    if username.len() < 3 {
+        let suffix = fallback_suffix.chars().take(8).collect::<String>();
+        username = format!("user_{suffix}");
+    }
+
+    username
+}
+
 #[allow(dead_code)]
 pub fn validate_meeting_day(day: i32) -> AppResult<()> {
     if !(0..=6).contains(&day) {

@@ -7,6 +7,7 @@ This backend powers the Community Savings / Chama platform with a Rust API for m
 - Exposes a JSON API for the Angular frontend
 - Authenticates requests using Supabase JWTs
 - Stores user profiles, members, transactions, loans, and penalties
+- Auto-provisions a backend user profile on `GET /api/users/me` when a confirmed Supabase user has no `user_profiles` row yet
 - Supports group-level financial operations and basic dashboard metrics
 - Provides endpoints for M-Pesa STK push and webhook handling
 
@@ -40,6 +41,8 @@ Create a .env file in the backend root with values like:
 ```env
 DATABASE_URL="postgresql://..."
 SUPABASE_JWT_SECRET="your-jwt-secret"
+SUPABASE_URL="https://your-project-ref.supabase.co"
+SUPABASE_WEBHOOK_SECRET="optional-webhook-secret"
 PORT=3000
 MPESA_CALLBACK_SECRET="dev-secret"
 MPESA_ENVIRONMENT="sandbox"
@@ -80,6 +83,8 @@ Authorization: Bearer <supabase-access-token>
 ```
 
 The backend validates the token and uses the Supabase user id from the JWT subject claim.
+
+`jsonwebtoken` 10 is built with the `rust_crypto` backend and the provider is installed during startup. This is required before validating Supabase JWTs.
 
 ## Testing
 
@@ -135,7 +140,7 @@ Requires `Authorization: Bearer <token>`.
 |--------|------|-------------|
 | `POST` | `/api/users/profile` | Create or sync profile after Supabase sign-in |
 | `GET` | `/api/users/profile/{username}` | Fetch profile by username |
-| `GET` | `/api/users/me` | Fetch current user's profile (by JWT `sub`) |
+| `GET` | `/api/users/me` | Fetch current user's profile by JWT `sub`; creates one from JWT metadata/email if missing |
 | `PATCH` | `/api/users/profile` | Update profile (theme, full name) |
 
 **Profile response shape:**
@@ -163,6 +168,8 @@ POST /api/users/profile
 
 - `username` — required (3–32 chars; letters, numbers, `_`, `.`)
 - `full_name` — optional; if omitted, read from JWT `user_metadata.full_name` or `user_metadata.name`
+
+When `/api/users/me` auto-creates a profile, it derives `username` from `user_metadata.username` first, then the email local-part, then a `user_<auth-id>` fallback. The derived username is normalized to the same character rules used by explicit profile creation.
 
 **Fetch profile by username:**
 

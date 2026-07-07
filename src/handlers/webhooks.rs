@@ -96,8 +96,10 @@ async fn handle_supabase_auth(
         }
     }
 
-    let username =
-        username.unwrap_or_else(|| format!("user_{}", &auth_user_id.simple().to_string()[..8]));
+    let username = crate::services::validation::normalize_username_candidate(
+        &username.unwrap_or_default(),
+        &auth_user_id.simple().to_string(),
+    );
     let full_name = user.user_metadata.as_ref().and_then(|m| {
         m.get("full_name")
             .and_then(|v| v.as_str())
@@ -117,12 +119,24 @@ async fn handle_supabase_auth(
     let mut tx = state.pool.begin().await?;
     let tx_ref = &mut tx;
 
-    // insert into users table if not exists
-    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING")
+    if let Some(email) = &email {
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, role)
+            VALUES ($1, $2, '', $3)
+            ON CONFLICT (email) DO UPDATE SET
+                role = EXCLUDED.role
+            "#,
+        )
         .bind(auth_user_id)
-        .bind(&email)
+        .bind(email)
+        .bind(match role {
+            UserRole::Administrator => "administrator",
+            UserRole::Member => "member",
+        })
         .execute(&mut **tx_ref)
         .await?;
+    }
 
     // upsert profile
     let _profile = sqlx::query_as::<_, crate::models::user_profile::UserProfile>(

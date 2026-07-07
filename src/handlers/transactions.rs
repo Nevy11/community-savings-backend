@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
-    models::transaction::{AppendLedgerRequest, LedgerEntry, TxType},
+    models::transaction::{AppendLedgerRequest, LedgerEntry},
     services::validation,
     AppState,
 };
@@ -115,10 +115,32 @@ pub async fn append_ledger_in_tx(
 ) -> AppResult<LedgerEntry> {
     validation::validate_append_only_tx(payload.amount, payload.tx_type)?;
 
-    sqlx::query("SELECT id FROM groups WHERE id = $1 FOR UPDATE")
+    let pool_balance: i64 = sqlx::query_scalar("SELECT pool_balance FROM groups WHERE id = $1 FOR UPDATE")
         .bind(payload.group_id)
         .fetch_one(&mut **tx)
         .await?;
+
+    let member_group_id: Uuid = sqlx::query_scalar("SELECT group_id FROM members WHERE id = $1")
+        .bind(payload.member_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    if member_group_id != payload.group_id {
+        return Err(AppError::BadRequest(
+            "member does not belong to the specified group".into(),
+        ));
+    }
+
+    let next_balance = pool_balance
+        .checked_add(payload.amount)
+        .ok_or(AppError::Internal)?;
+    if next_balance < 0 {
+        return Err(AppError::InsufficientFunds {
+            available: pool_balance,
+            required: payload.amount.abs(),
+        });
+    }
 
     let entry = sqlx::query_as::<_, LedgerEntry>(
         r#"
@@ -135,22 +157,15 @@ pub async fn append_ledger_in_tx(
     .fetch_one(&mut **tx)
     .await?;
 
-    let pool_delta = match payload.tx_type {
-        TxType::Deposit | TxType::SocialFundPayment | TxType::LoanRepayment | TxType::FinePayment => {
-            payload.amount
-        }
-        TxType::Withdrawal | TxType::LoanDisbursement | TxType::DividendPayout => payload.amount,
-    };
-
     sqlx::query(
         r#"
         UPDATE groups
-        SET pool_balance = pool_balance + $2
+        SET pool_balance = $2
         WHERE id = $1
         "#,
     )
     .bind(payload.group_id)
-    .bind(pool_delta)
+    .bind(next_balance)
     .execute(&mut **tx)
     .await?;
 

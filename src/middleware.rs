@@ -16,6 +16,7 @@ use crate::{AppState, error::AppError};
 pub struct UserMetadata {
     pub full_name: Option<String>,
     pub name: Option<String>,
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
