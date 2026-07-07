@@ -70,6 +70,87 @@ fn username_from_claims(claims: &Claims) -> Option<String> {
         })
 }
 
+fn username_candidates(claims: &Claims) -> Vec<String> {
+    let fallback_suffix = claims.sub.replace('-', "");
+    let mut candidates = Vec::new();
+
+    if let Some(base) = username_from_claims(claims) {
+        candidates.push(base.clone());
+
+        let suffix = fallback_suffix.chars().take(8).collect::<String>();
+        let alternate = validation::normalize_username_candidate(
+            &format!("{base}_{suffix}"),
+            &fallback_suffix,
+        );
+        if !candidates.contains(&alternate) {
+            candidates.push(alternate);
+        }
+
+        let reversed_suffix = fallback_suffix.chars().rev().take(8).collect::<String>();
+        let alternate = validation::normalize_username_candidate(
+            &format!("{base}_{reversed_suffix}"),
+            &fallback_suffix,
+        );
+        if !candidates.contains(&alternate) {
+            candidates.push(alternate);
+        }
+    }
+
+    let fallback = validation::normalize_username_candidate(
+        &format!("user_{}", fallback_suffix.chars().take(8).collect::<String>()),
+        &fallback_suffix,
+    );
+    if !candidates.contains(&fallback) {
+        candidates.push(fallback);
+    }
+
+    candidates
+}
+
+async fn insert_profile_with_retry(
+    pool: &sqlx::PgPool,
+    auth_user_id: Uuid,
+    claims: &Claims,
+    role: UserRole,
+) -> AppResult<UserProfile> {
+    let full_name = claims.full_name();
+
+    for username in username_candidates(claims) {
+        validation::validate_username(&username)?;
+
+        let result = sqlx::query_as::<_, UserProfile>(
+            r#"
+            INSERT INTO user_profiles (auth_user_id, username, full_name, role)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (auth_user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+                role = EXCLUDED.role,
+                updated_at = NOW()
+            RETURNING *
+            "#,
+        )
+        .bind(auth_user_id)
+        .bind(&username)
+        .bind(&full_name)
+        .bind(role)
+        .fetch_one(pool)
+        .await;
+
+        match result {
+            Ok(profile) => return Ok(profile),
+            Err(sqlx::Error::Database(db_err))
+                if db_err.constraint() == Some("user_profiles_username_key") =>
+            {
+                continue;
+            }
+            Err(other) => return Err(other.into()),
+        }
+    }
+
+    Err(AppError::Conflict("username is already taken".into()))
+}
+
 fn to_response(profile: UserProfile, email: Option<String>) -> UserProfileResponse {
     let mut response = UserProfileResponse::from(profile);
     response.email = email;
@@ -144,37 +225,13 @@ pub async fn get_me(
     .await?
     {
         Some(profile) => profile,
-        None => {
-            let username = username_from_claims(&claims)
-                .ok_or_else(|| AppError::BadRequest("username is required".into()))?;
-            validation::validate_username(&username)?;
-
-            sqlx::query_as::<_, UserProfile>(
-                r#"
-                INSERT INTO user_profiles (auth_user_id, username, full_name, role)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (auth_user_id) DO UPDATE SET
-                    username = EXCLUDED.username,
-                    full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
-                    updated_at = NOW()
-                RETURNING *
-                "#,
-            )
-            .bind(auth_user_id)
-            .bind(&username)
-            .bind(claims.full_name())
-            .bind(UserRole::Administrator)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|err| match err {
-                sqlx::Error::Database(db_err)
-                    if db_err.constraint() == Some("user_profiles_username_key") =>
-                {
-                    AppError::Conflict("username is already taken".into())
-                }
-                other => AppError::from(other),
-            })?
-        }
+        None => insert_profile_with_retry(
+            &state.pool,
+            auth_user_id,
+            &claims,
+            UserRole::Member,
+        )
+        .await?,
     };
 
     Ok(Json(to_response(profile, claims.email)))
@@ -189,7 +246,7 @@ pub async fn upsert_profile(
 
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
     let full_name = payload.full_name.or_else(|| claims.full_name());
-    let role = payload.role.unwrap_or(UserRole::Administrator);
+    let role = payload.role.unwrap_or(UserRole::Member);
 
     let profile = sqlx::query_as::<_, UserProfile>(
         r#"
