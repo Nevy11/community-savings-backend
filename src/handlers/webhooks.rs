@@ -115,28 +115,9 @@ async fn handle_supabase_auth(
         _ => UserRole::Administrator,
     };
 
-    // Insert into users and user_profiles in a transaction
+    // Supabase Auth owns credentials; the app stores only profile data.
     let mut tx = state.pool.begin().await?;
     let tx_ref = &mut tx;
-
-    if let Some(email) = &email {
-        sqlx::query(
-            r#"
-            INSERT INTO users (id, email, password_hash, role)
-            VALUES ($1, $2, '', $3)
-            ON CONFLICT (email) DO UPDATE SET
-                role = EXCLUDED.role
-            "#,
-        )
-        .bind(auth_user_id)
-        .bind(email)
-        .bind(match role {
-            UserRole::Administrator => "administrator",
-            UserRole::Member => "member",
-        })
-        .execute(&mut **tx_ref)
-        .await?;
-    }
 
     // upsert profile
     let _profile = sqlx::query_as::<_, crate::models::user_profile::UserProfile>(
