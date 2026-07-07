@@ -36,13 +36,7 @@ impl Claims {
 }
 
 fn should_skip_auth(method: &Method, path: &str) -> bool {
-    if method == Method::OPTIONS || path == "/ping" || path == "/health" {
-        return true;
-    }
-
-    method == Method::GET && path.starts_with("/api/")
-        || path.starts_with("/api/users/profile")
-        || path.starts_with("/api/users/me")
+    method == Method::OPTIONS || path == "/ping" || path == "/health"
 }
 
 pub async fn require_auth(
