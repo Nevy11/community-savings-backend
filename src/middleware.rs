@@ -4,7 +4,10 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, Validation, decode, decode_header,
+    jwk::{Jwk, JwkSet},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{AppState, error::AppError};
@@ -35,6 +38,78 @@ impl Claims {
 
 fn should_skip_auth(method: &Method, path: &str) -> bool {
     method == Method::OPTIONS || path == "/ping" || path == "/health"
+}
+
+async fn fetch_supabase_jwk(supabase_url: &str, kid: &str) -> Result<Jwk, AppError> {
+    if supabase_url.is_empty() {
+        return Err(AppError::Unauthorized(
+            "SUPABASE_URL is required for asymmetric JWT validation".into(),
+        ));
+    }
+
+    let jwks_url = format!("{supabase_url}/auth/v1/.well-known/jwks.json");
+    let jwks = reqwest::get(&jwks_url)
+        .await
+        .map_err(|err| {
+            eprintln!("[auth] failed to fetch Supabase JWKS from {jwks_url}: {err}");
+            AppError::Unauthorized("unable to fetch token signing keys".into())
+        })?
+        .error_for_status()
+        .map_err(|err| {
+            eprintln!("[auth] Supabase JWKS endpoint returned an error from {jwks_url}: {err}");
+            AppError::Unauthorized("unable to fetch token signing keys".into())
+        })?
+        .json::<JwkSet>()
+        .await
+        .map_err(|err| {
+            eprintln!("[auth] failed to parse Supabase JWKS from {jwks_url}: {err}");
+            AppError::Unauthorized("invalid token signing keys".into())
+        })?;
+
+    jwks.find(kid).cloned().ok_or_else(|| {
+        eprintln!("[auth] no Supabase JWKS key found for kid {kid}");
+        AppError::Unauthorized("unknown token signing key".into())
+    })
+}
+
+async fn decoding_key_for_token(
+    token: &str,
+    state: &AppState,
+) -> Result<(DecodingKey, Algorithm), AppError> {
+    let header = decode_header(token).map_err(|err| {
+        eprintln!("[auth] failed to decode jwt header: {err}");
+        AppError::Unauthorized("invalid access token".into())
+    })?;
+
+    match header.alg {
+        Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => Ok((
+            DecodingKey::from_secret(state.config.supabase_jwt_secret.as_bytes()),
+            header.alg,
+        )),
+        Algorithm::RS256
+        | Algorithm::RS384
+        | Algorithm::RS512
+        | Algorithm::PS256
+        | Algorithm::PS384
+        | Algorithm::PS512
+        | Algorithm::ES256
+        | Algorithm::ES384
+        | Algorithm::EdDSA => {
+            let kid = header.kid.ok_or_else(|| {
+                eprintln!(
+                    "[auth] token uses {:?} but does not include a kid header",
+                    header.alg
+                );
+                AppError::Unauthorized("missing token signing key id".into())
+            })?;
+            let jwk = fetch_supabase_jwk(&state.config.supabase_url, &kid).await?;
+            let key = DecodingKey::from_jwk(&jwk).map_err(|err| {
+                eprintln!("[auth] failed to build decoding key for kid {kid}: {err}");
+                AppError::Unauthorized("invalid token signing key".into())
+            })?;
+            Ok((key, header.alg))
+        }
+    }
 }
 
 pub async fn require_auth(
@@ -70,12 +145,14 @@ pub async fn require_auth(
 
     let token = &auth_header[7..];
 
-    let mut validation = Validation::new(Algorithm::HS256);
+    let (decoding_key, algorithm) = decoding_key_for_token(token, &state).await?;
+
+    let mut validation = Validation::new(algorithm);
     validation.set_audience(&["authenticated"]);
 
     let token_data = match decode::<Claims>(
         token,
-        &DecodingKey::from_secret(state.config.supabase_jwt_secret.as_bytes()),
+        &decoding_key,
         &validation,
     ) {
         Ok(c) => c,

@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub mpesa_consumer_secret: String,
     pub mpesa_passkey: String,
     pub mpesa_shortcode: String,
+    pub supabase_url: String,
     pub supabase_jwt_secret: String,
     pub supabase_webhook_secret: String,
 }
@@ -111,6 +112,14 @@ impl AppConfig {
         let mpesa_shortcode = std::env::var("MPESA_SHORTCODE")
             .unwrap_or_default();
             
+        let supabase_url = std::env::var("SUPABASE_URL")
+            .unwrap_or_default()
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_end_matches('/')
+            .to_string();
+
         let supabase_jwt_secret = std::env::var("SUPABASE_JWT_SECRET")
             .unwrap_or_else(|_| "super-secret-jwt-token-with-at-least-32-bytes-long".into());
 
@@ -125,6 +134,7 @@ impl AppConfig {
             mpesa_consumer_secret,
             mpesa_passkey,
             mpesa_shortcode,
+            supabase_url,
             supabase_jwt_secret,
             supabase_webhook_secret,
         }
