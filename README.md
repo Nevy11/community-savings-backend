@@ -8,6 +8,7 @@ This backend powers the Community Savings / Chama platform with a Rust API for m
 - Authenticates requests using Supabase JWTs
 - Stores user profiles, members, transactions, loans, and penalties
 - Auto-provisions a backend user profile on `GET /api/users/me` when a confirmed Supabase user has no `user_profiles` row yet
+- Provides the profile `role` field used by the frontend to choose between the administrator dashboard and member portal
 - Supports group-level financial operations and basic dashboard metrics
 - Provides endpoints for M-Pesa STK push and webhook handling
 
@@ -73,6 +74,15 @@ curl http://localhost:3000/health
 - /api/loans — loan request, approval, and disbursement flow
 - /api/groups — group settings and dashboard metrics
 - /api/mpesa — STK push and webhook endpoints
+
+## Frontend role contract
+
+The Angular frontend uses the authenticated user's profile role to select the interface:
+
+- `administrator` — sees the admin console with overview, members, transactions, loans, and dividends analytics.
+- `member` — sees the member portal with personal savings, loan balances, fines, meeting information, guarantees, and statements.
+
+New profiles default to `member` unless the database or profile sync explicitly assigns `administrator`.
 
 ## Authentication
 
@@ -197,12 +207,16 @@ Both fields are optional — send only what you want to change.
 - `preferred_theme` → `"light"`
 - `role` → `"member"`
 
+Accepted role values:
+- `"member"`
+- `"administrator"`
+
 **Frontend flow:**
 
 1. User signs in via Supabase Auth on the client
 2. Call `POST /api/users/profile` with `username` (and optionally `full_name`)
 3. On app load, call `GET /api/users/profile/{username}` or `GET /api/users/me`
-4. Apply `preferred_theme` and `role` to the UI
+4. Apply `preferred_theme` and route the user based on `role`
 5. Use `PATCH /api/users/profile` when the user changes theme settings
 
 **Example (JavaScript):**
