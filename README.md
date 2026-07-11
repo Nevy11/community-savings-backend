@@ -478,6 +478,16 @@ Render sets `PORT` automatically. The app binds to `0.0.0.0:$PORT`.
 
 ---
 
+## Supabase Edge Functions
+
+To deploy a Supabase Edge Function, use the following command to ensure JWT verification is handled correctly:
+
+```bash
+supabase functions deploy <function_name> --no-verify-jwt
+```
+
+---
+
 ## Testing
 
 ```bash
