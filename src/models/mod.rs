@@ -4,3 +4,4 @@ pub mod member;
 pub mod penalty;
 pub mod transaction;
 pub mod user_profile;
+pub mod invitation;

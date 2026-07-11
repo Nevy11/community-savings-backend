@@ -26,10 +26,11 @@ pub fn routes() -> Router<AppState> {
 #[derive(Serialize)]
 pub struct UserProfileResponse {
     pub id: Uuid,
-    pub username: String,
+    pub username: Option<String>,
     pub full_name: Option<String>,
     pub preferred_theme: UserTheme,
     pub role: UserRole,
+    pub phone_number: Option<String>,
     pub email: Option<String>,
 }
 
@@ -41,6 +42,7 @@ impl From<UserProfile> for UserProfileResponse {
             full_name: profile.full_name,
             preferred_theme: profile.preferred_theme,
             role: profile.role,
+            phone_number: profile.phone_number,
             email: None,
         }
     }
@@ -114,26 +116,29 @@ async fn insert_profile_with_retry(
     role: UserRole,
 ) -> AppResult<UserProfile> {
     let full_name = claims.full_name();
+    let phone_number = claims.phone_number();
 
     for username in username_candidates(claims) {
         validation::validate_username(&username)?;
 
         let result = sqlx::query_as::<_, UserProfile>(
             r#"
-            INSERT INTO user_profiles (auth_user_id, username, full_name, role)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO user_profiles (auth_user_id, username, full_name, role, phone_number)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (auth_user_id) DO UPDATE SET
-                username = EXCLUDED.username,
+                username = COALESCE(EXCLUDED.username, user_profiles.username),
                 full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
                 role = EXCLUDED.role,
+                phone_number = COALESCE(EXCLUDED.phone_number, user_profiles.phone_number),
                 updated_at = NOW()
             RETURNING *
             "#,
         )
         .bind(auth_user_id)
-        .bind(&username)
+        .bind(Some(&username))
         .bind(&full_name)
         .bind(role)
+        .bind(&phone_number)
         .fetch_one(pool)
         .await;
 
@@ -242,7 +247,9 @@ pub async fn upsert_profile(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<CreateUserProfileRequest>,
 ) -> AppResult<Json<UserProfileResponse>> {
-    validation::validate_username(&payload.username)?;
+    if let Some(ref un) = payload.username {
+        validation::validate_username(un)?;
+    }
 
     let auth_user_id = parse_auth_user_id(&claims.sub)?;
     let full_name = payload.full_name.or_else(|| claims.full_name());
@@ -250,12 +257,13 @@ pub async fn upsert_profile(
 
     let profile_result = sqlx::query_as::<_, UserProfile>(
         r#"
-        INSERT INTO user_profiles (auth_user_id, username, full_name, role)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO user_profiles (auth_user_id, username, full_name, role, phone_number)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (auth_user_id) DO UPDATE SET
-            username = EXCLUDED.username,
+            username = COALESCE(EXCLUDED.username, user_profiles.username),
             full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
             role = EXCLUDED.role,
+            phone_number = COALESCE(EXCLUDED.phone_number, user_profiles.phone_number),
             updated_at = NOW()
         RETURNING *
         "#,
@@ -264,6 +272,7 @@ pub async fn upsert_profile(
     .bind(&payload.username)
     .bind(&full_name)
     .bind(role)
+    .bind(&payload.phone_number)
     .fetch_one(&state.pool)
     .await;
 
@@ -301,12 +310,14 @@ pub async fn update_profile(
 
     let full_name = payload.full_name.or(existing.full_name);
     let preferred_theme = payload.preferred_theme.unwrap_or(existing.preferred_theme);
+    let phone_number = payload.phone_number.or(existing.phone_number);
 
     let profile = sqlx::query_as::<_, UserProfile>(
         r#"
         UPDATE user_profiles
         SET full_name = $2,
             preferred_theme = $3,
+            phone_number = $4,
             updated_at = NOW()
         WHERE auth_user_id = $1
         RETURNING *
@@ -315,6 +326,7 @@ pub async fn update_profile(
     .bind(auth_user_id)
     .bind(full_name)
     .bind(preferred_theme)
+    .bind(phone_number)
     .fetch_one(&state.pool)
     .await?;
 

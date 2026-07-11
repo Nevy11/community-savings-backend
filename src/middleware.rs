@@ -17,6 +17,7 @@ pub struct UserMetadata {
     pub full_name: Option<String>,
     pub name: Option<String>,
     pub username: Option<String>,
+    pub phone_number: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -34,6 +35,12 @@ impl Claims {
         self.user_metadata
             .as_ref()
             .and_then(|meta| meta.full_name.clone().or_else(|| meta.name.clone()))
+    }
+
+    pub fn phone_number(&self) -> Option<String> {
+        self.user_metadata
+            .as_ref()
+            .and_then(|meta| meta.phone_number.clone())
     }
 }
 

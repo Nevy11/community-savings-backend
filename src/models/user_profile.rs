@@ -23,23 +23,26 @@ pub enum UserRole {
 pub struct UserProfile {
     pub id: Uuid,
     pub auth_user_id: Uuid,
-    pub username: String,
+    pub username: Option<String>,
     pub full_name: Option<String>,
     pub preferred_theme: UserTheme,
     pub role: UserRole,
+    pub phone_number: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserProfileRequest {
-    pub username: String,
+    pub username: Option<String>,
     pub full_name: Option<String>,
+    pub phone_number: Option<String>,
     pub role: Option<UserRole>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserProfileRequest {
     pub full_name: Option<String>,
+    pub phone_number: Option<String>,
     pub preferred_theme: Option<UserTheme>,
 }
