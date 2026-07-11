@@ -15,8 +15,8 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_my_invitations).post(create_invitation))
-        .route("/:id/accept", axum::routing::post(accept_invitation))
-        .route("/:id/reject", axum::routing::post(reject_invitation))
+        .route("/{id}/accept", axum::routing::post(accept_invitation))
+        .route("/{id}/reject", axum::routing::post(reject_invitation))
 }
 
 async fn create_invitation(
