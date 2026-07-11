@@ -248,7 +248,7 @@ pub async fn upsert_profile(
     let full_name = payload.full_name.or_else(|| claims.full_name());
     let role = payload.role.unwrap_or(UserRole::Member);
 
-    let profile = sqlx::query_as::<_, UserProfile>(
+    let profile_result = sqlx::query_as::<_, UserProfile>(
         r#"
         INSERT INTO user_profiles (auth_user_id, username, full_name, role)
         VALUES ($1, $2, $3, $4)
@@ -265,15 +265,22 @@ pub async fn upsert_profile(
     .bind(&full_name)
     .bind(role)
     .fetch_one(&state.pool)
-    .await
-    .map_err(|err| match err {
-        sqlx::Error::Database(db_err)
+    .await;
+
+    let profile = match profile_result {
+        Ok(p) => p,
+        Err(sqlx::Error::Database(db_err))
             if db_err.constraint() == Some("user_profiles_username_key") =>
         {
-            AppError::Conflict("username is already taken".into())
+            let exists = load_requester_profile(&state.pool, &claims).await?.is_some();
+            if exists {
+                return Err(AppError::Conflict("username is already taken".into()));
+            } else {
+                insert_profile_with_retry(&state.pool, auth_user_id, &claims, role).await?
+            }
         }
-        other => AppError::from(other),
-    })?;
+        Err(other) => return Err(AppError::from(other)),
+    };
 
     Ok(Json(to_response(profile, claims.email)))
 }
