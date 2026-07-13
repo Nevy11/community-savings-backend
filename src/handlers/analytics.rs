@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{error::AppResult, AppState};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/dividends/:group_id", get(get_dividends))
+    Router::new().route("/dividends/{group_id}", get(get_dividends))
 }
 
 #[derive(Serialize)]
