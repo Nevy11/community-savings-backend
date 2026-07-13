@@ -23,7 +23,7 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_members).post(create_member))
-        .route("/{id}", get(get_member).patch(update_member))
+        .route("/{id}", get(get_member).patch(update_member).put(update_member).delete(delete_member))
         .route("/{id}/attendance", get(list_attendance).post(record_attendance))
 }
 
@@ -101,6 +101,21 @@ async fn update_member(
     .bind(payload.full_name)
     .bind(payload.phone_number)
     .bind(payload.is_active)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(member))
+}
+
+async fn delete_member(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Member>> {
+    let member = sqlx::query_as::<_, Member>(
+        "DELETE FROM members WHERE id = $1 RETURNING *"
+    )
+    .bind(id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;

@@ -60,6 +60,8 @@ async fn request_loan(
         return Err(AppError::BadRequest("term_months must be positive".into()));
     }
 
+    let mut tx = state.pool.begin().await?;
+
     let loan = sqlx::query_as::<_, Loan>(
         r#"
         INSERT INTO loans (group_id, member_id, principal, term_months)
@@ -71,8 +73,26 @@ async fn request_loan(
     .bind(payload.member_id)
     .bind(payload.principal)
     .bind(payload.term_months)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    if let Some(guarantors) = payload.guarantors {
+        for guarantor in guarantors {
+            sqlx::query(
+                r#"
+                INSERT INTO loan_guarantors (loan_id, member_id, guaranteed_amount)
+                VALUES ($1, $2, $3)
+                "#,
+            )
+            .bind(loan.id)
+            .bind(guarantor.member_id)
+            .bind(guarantor.guaranteed_amount)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
 
     Ok(Json(loan))
 }
@@ -112,13 +132,14 @@ async fn add_guarantor(
 
     let guarantor = sqlx::query_as::<_, LoanGuarantor>(
         r#"
-        INSERT INTO loan_guarantors (loan_id, member_id)
-        VALUES ($1, $2)
+        INSERT INTO loan_guarantors (loan_id, member_id, guaranteed_amount)
+        VALUES ($1, $2, $3)
         RETURNING *
         "#,
     )
     .bind(id)
     .bind(payload.member_id)
+    .bind(payload.guaranteed_amount)
     .fetch_one(&mut *tx)
     .await?;
 

@@ -9,6 +9,7 @@ pub mod transactions;
 pub mod users;
 pub mod webhooks;
 pub mod invitations;
+pub mod analytics;
 
 use axum::Router;
 
@@ -25,6 +26,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .nest("/loans", loans::routes())
         .nest("/penalties", penalties::routes())
         .nest("/invitations", invitations::routes())
+        .nest("/analytics", analytics::routes())
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::middleware::require_auth));
 
     Router::new()

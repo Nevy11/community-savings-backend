@@ -31,6 +31,7 @@ pub struct Loan {
 pub struct LoanGuarantor {
     pub loan_id: Uuid,
     pub member_id: Uuid,
+    pub guaranteed_amount: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,9 +40,17 @@ pub struct CreateLoanRequest {
     pub member_id: Uuid,
     pub principal: i64,
     pub term_months: i32,
+    pub guarantors: Option<Vec<LoanGuarantorInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoanGuarantorInput {
+    pub member_id: Uuid,
+    pub guaranteed_amount: i64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AddGuarantorRequest {
     pub member_id: Uuid,
+    pub guaranteed_amount: i64,
 }

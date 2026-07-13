@@ -19,6 +19,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/callback", post(mpesa_callback))
         .route("/stkpush", post(stk_push))
+        .route("/events", axum::routing::get(list_events))
 }
 
 #[derive(Deserialize)]
@@ -111,4 +112,30 @@ async fn mpesa_callback(
         transaction_id: payload.transaction_id,
         ledger_entry_id: Some(entry.id),
     }))
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct MpesaEvent {
+    pub id: uuid::Uuid,
+    pub transaction_id: Option<String>,
+    pub phone_number: Option<String>,
+    pub member_id: Option<uuid::Uuid>,
+    pub group_id: Option<uuid::Uuid>,
+    pub amount: i64,
+    pub result_code: Option<i32>,
+    pub result_desc: Option<String>,
+    pub status: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn list_events(
+    State(state): State<AppState>,
+) -> AppResult<Json<Vec<MpesaEvent>>> {
+    let events = sqlx::query_as::<_, MpesaEvent>(
+        "SELECT id, transaction_id, phone_number, member_id, group_id, amount, result_code, result_desc, status, created_at FROM mpesa_callbacks ORDER BY created_at DESC"
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(events))
 }
