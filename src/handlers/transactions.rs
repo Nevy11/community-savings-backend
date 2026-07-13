@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
-    models::transaction::{AppendLedgerRequest, LedgerEntry},
+    models::transaction::{AppendLedgerRequest, LedgerEntry, TxType},
     services::validation,
     AppState,
 };
@@ -168,6 +168,38 @@ pub async fn append_ledger_in_tx(
     .bind(next_balance)
     .execute(&mut **tx)
     .await?;
+
+    if payload.tx_type == TxType::LoanRepayment {
+        if let Some(ref_str) = &payload.reference {
+            if let Some(uuid_str) = ref_str.strip_prefix("loan_repayment:") {
+                if let Ok(loan_id) = Uuid::parse_str(uuid_str) {
+                    let loan: crate::models::loan::Loan = sqlx::query_as::<_, crate::models::loan::Loan>(
+                        "SELECT * FROM loans WHERE id = $1 FOR UPDATE"
+                    )
+                    .bind(loan_id)
+                    .fetch_optional(&mut **tx)
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                    
+                    let new_balance = loan.outstanding_balance - payload.amount.abs();
+                    let new_status = if new_balance <= 0 { crate::models::loan::LoanStatus::Repaid } else { loan.status };
+                    
+                    sqlx::query(
+                        r#"
+                        UPDATE loans
+                        SET outstanding_balance = $2, status = $3
+                        WHERE id = $1
+                        "#
+                    )
+                    .bind(loan_id)
+                    .bind(std::cmp::max(0, new_balance))
+                    .bind(new_status as crate::models::loan::LoanStatus)
+                    .execute(&mut **tx)
+                    .await?;
+                }
+            }
+        }
+    }
 
     Ok(entry)
 }

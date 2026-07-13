@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     routing::get,
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::Deserialize;
 use sqlx::{Postgres, Transaction};
@@ -17,12 +17,14 @@ use crate::{
         penalty::{Penalty, PenaltyType},
     },
     services::validation,
+    middleware::Claims,
     AppState,
 };
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_members).post(create_member))
+        .route("/me", get(get_me))
         .route("/{id}", get(get_member).patch(update_member).put(update_member).delete(delete_member))
         .route("/{id}/attendance", get(list_attendance).post(record_attendance))
 }
@@ -40,6 +42,24 @@ async fn list_members(State(state): State<AppState>) -> AppResult<Json<Vec<Membe
     .await?;
 
     Ok(Json(members))
+}
+
+async fn get_me(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> AppResult<Json<Member>> {
+    let auth_user_id = Uuid::parse_str(&claims.sub)
+        .map_err(|_| AppError::BadRequest("invalid auth user id".into()))?;
+
+    let member = sqlx::query_as::<_, Member>(
+        "SELECT * FROM members WHERE auth_user_id = $1 ORDER BY joined_at DESC LIMIT 1"
+    )
+    .bind(auth_user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(member))
 }
 
 async fn get_member(

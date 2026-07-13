@@ -27,10 +27,11 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .nest("/penalties", penalties::routes())
         .nest("/invitations", invitations::routes())
         .nest("/analytics", analytics::routes())
+        .nest("/mpesa", mpesa::protected_routes())
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::middleware::require_auth));
 
     Router::new()
         .merge(protected_routes)
-        .nest("/mpesa", mpesa::routes())
+        .nest("/mpesa", mpesa::public_routes())
         .nest("/webhooks", webhooks::routes())
 }

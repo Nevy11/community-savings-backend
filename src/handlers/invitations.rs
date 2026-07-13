@@ -70,6 +70,8 @@ async fn accept_invitation(
     .await?.ok_or_else(|| AppError::NotFound)?;
 
     let full_name = claims.full_name().unwrap_or_else(|| "Unknown Member".into());
+    let auth_user_id = Uuid::parse_str(&claims.sub)
+        .map_err(|_| AppError::BadRequest("invalid auth user id".into()))?;
 
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM members WHERE group_id = $1 AND phone_number = $2)"
@@ -81,10 +83,25 @@ async fn accept_invitation(
 
     if !exists {
         sqlx::query(
-            "INSERT INTO members (group_id, full_name, phone_number, is_active) VALUES ($1, $2, $3, true)"
+            "INSERT INTO members (group_id, full_name, phone_number, is_active, auth_user_id) VALUES ($1, $2, $3, true, $4)"
         )
         .bind(inv.group_id)
         .bind(&full_name)
+        .bind(&inv.phone_number)
+        .bind(auth_user_id)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+            UPDATE members
+            SET auth_user_id = $1, full_name = $2, is_active = true
+            WHERE group_id = $3 AND phone_number = $4 AND auth_user_id IS NULL
+            "#
+        )
+        .bind(auth_user_id)
+        .bind(&full_name)
+        .bind(inv.group_id)
         .bind(&inv.phone_number)
         .execute(&mut *tx)
         .await?;

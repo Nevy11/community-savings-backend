@@ -20,6 +20,7 @@ pub struct Loan {
     pub group_id: Uuid,
     pub member_id: Uuid,
     pub principal: i64,
+    pub outstanding_balance: i64,
     pub term_months: i32,
     pub status: LoanStatus,
     pub approved_at: Option<DateTime<Utc>>,
@@ -53,4 +54,9 @@ pub struct LoanGuarantorInput {
 pub struct AddGuarantorRequest {
     pub member_id: Uuid,
     pub guaranteed_amount: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RepayLoanRequest {
+    pub amount: i64,
 }

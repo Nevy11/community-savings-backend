@@ -2,12 +2,13 @@ use axum::{
     extract::State,
     http::HeaderMap,
     routing::post,
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
+    middleware::Claims,
     models::transaction::{AppendLedgerRequest, LedgerEntry, TxType},
     services::{mpesa, validation},
     AppState,
@@ -15,9 +16,12 @@ use crate::{
 
 use super::transactions::append_ledger_in_tx;
 
-pub fn routes() -> Router<AppState> {
+pub fn public_routes() -> Router<AppState> {
+    Router::new().route("/callback", post(mpesa_callback))
+}
+
+pub fn protected_routes() -> Router<AppState> {
     Router::new()
-        .route("/callback", post(mpesa_callback))
         .route("/stkpush", post(stk_push))
         .route("/events", axum::routing::get(list_events))
 }
@@ -130,10 +134,28 @@ pub struct MpesaEvent {
 
 async fn list_events(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
 ) -> AppResult<Json<Vec<MpesaEvent>>> {
-    let events = sqlx::query_as::<_, MpesaEvent>(
-        "SELECT id, transaction_id, phone_number, member_id, group_id, amount, result_code, result_desc, status, created_at FROM mpesa_callbacks ORDER BY created_at DESC"
+    let auth_user_id = uuid::Uuid::parse_str(&claims.sub)
+        .map_err(|_| AppError::BadRequest("invalid auth user id".into()))?;
+
+    let group_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT group_id FROM members WHERE auth_user_id = $1 ORDER BY joined_at DESC LIMIT 1",
     )
+    .bind(auth_user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let events = sqlx::query_as::<_, MpesaEvent>(
+        r#"
+        SELECT id, transaction_id, phone_number, member_id, group_id, amount, result_code, result_desc, status, created_at
+        FROM mpesa_callbacks
+        WHERE group_id = $1
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(group_id)
     .fetch_all(&state.pool)
     .await?;
 

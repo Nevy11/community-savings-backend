@@ -7,6 +7,7 @@ use uuid::Uuid;
 pub struct Member {
     pub id: Uuid,
     pub group_id: Uuid,
+    pub auth_user_id: Option<Uuid>,
     pub full_name: String,
     pub phone_number: String,
     pub is_active: bool,

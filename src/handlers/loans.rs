@@ -13,6 +13,7 @@ use crate::{
         group::Group,
         loan::{
             AddGuarantorRequest, CreateLoanRequest, Loan, LoanGuarantor, LoanStatus,
+            RepayLoanRequest,
         },
         transaction::{AppendLedgerRequest, TxType},
     },
@@ -30,6 +31,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}/guarantors", get(list_guarantors).post(add_guarantor))
         .route("/{id}/approve", axum::routing::post(approve_loan))
         .route("/{id}/disburse", axum::routing::post(disburse_loan))
+        .route("/{id}/repay", axum::routing::post(repay_loan))
         .route("/{id}/schedule", get(loan_schedule))
 }
 
@@ -64,8 +66,8 @@ async fn request_loan(
 
     let loan = sqlx::query_as::<_, Loan>(
         r#"
-        INSERT INTO loans (group_id, member_id, principal, term_months)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO loans (group_id, member_id, principal, outstanding_balance, term_months)
+        VALUES ($1, $2, $3, $3, $4)
         RETURNING *
         "#,
     )
@@ -270,6 +272,52 @@ struct LoanScheduleResponse {
     group_interest_method: crate::models::group::InterestMethod,
     quotes: Vec<AmortizationQuote>,
     selected_quote: AmortizationQuote,
+}
+
+async fn repay_loan(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<RepayLoanRequest>,
+) -> AppResult<Json<Loan>> {
+    validation::validate_positive_amount(payload.amount, "amount")?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let loan = sqlx::query_as::<_, Loan>("SELECT * FROM loans WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    if loan.status != LoanStatus::Disbursed {
+        return Err(AppError::Conflict(
+            "only disbursed loans can be repaid".into(),
+        ));
+    }
+
+    if payload.amount > loan.outstanding_balance {
+        return Err(AppError::BadRequest(format!(
+            "repayment amount exceeds outstanding balance of {}",
+            loan.outstanding_balance
+        )));
+    }
+
+    let ledger_payload = AppendLedgerRequest {
+        group_id: loan.group_id,
+        member_id: loan.member_id,
+        amount: payload.amount,
+        tx_type: TxType::LoanRepayment,
+        reference: Some(format!("loan_repayment:{id}")),
+    };
+    append_ledger_in_tx(&mut tx, &ledger_payload).await?;
+
+    let loan = sqlx::query_as::<_, Loan>("SELECT * FROM loans WHERE id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(Json(loan))
 }
 
 async fn loan_schedule(
