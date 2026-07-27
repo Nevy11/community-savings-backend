@@ -110,3 +110,94 @@ pub fn validate_append_only_tx(amount: i64, tx_type: TxType) -> AppResult<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::transaction::TxType;
+
+    #[test]
+    fn test_validate_positive_amount() {
+        assert!(validate_positive_amount(1, "field").is_ok());
+        assert!(validate_positive_amount(100, "field").is_ok());
+        assert!(validate_positive_amount(0, "field").is_err());
+        assert!(validate_positive_amount(-1, "field").is_err());
+    }
+
+    #[test]
+    fn test_validate_non_negative_amount() {
+        assert!(validate_non_negative_amount(1, "field").is_ok());
+        assert!(validate_non_negative_amount(0, "field").is_ok());
+        assert!(validate_non_negative_amount(-1, "field").is_err());
+    }
+
+    #[test]
+    fn test_validate_phone_number() {
+        assert!(validate_phone_number("123456789").is_ok());
+        assert!(validate_phone_number("123456789012345").is_ok());
+        assert!(validate_phone_number("+254712345678").is_ok()); // 12 digits
+        assert!(validate_phone_number("12345678").is_err()); // too short
+        assert!(validate_phone_number("1234567890123456").is_err()); // too long
+    }
+
+    #[test]
+    fn test_validate_username() {
+        assert!(validate_username("valid_user").is_ok());
+        assert!(validate_username("valid.user").is_ok());
+        assert!(validate_username("user123").is_ok());
+        
+        assert!(validate_username("ab").is_err()); // too short
+        assert!(validate_username("a".repeat(33).as_str()).is_err()); // too long
+        assert!(validate_username("invalid-user!").is_err()); // invalid chars
+        assert!(validate_username("user@name").is_err()); // invalid chars
+    }
+
+    #[test]
+    fn test_normalize_username_candidate() {
+        assert_eq!(normalize_username_candidate("Valid User", "12345678"), "valid_user");
+        assert_eq!(normalize_username_candidate("user@name!", "12345678"), "user_name");
+        assert_eq!(normalize_username_candidate("a", "12345678"), "user_12345678");
+        assert_eq!(normalize_username_candidate("  trim  ", "123"), "trim");
+        
+        let long_name = "a".repeat(40);
+        let normalized = normalize_username_candidate(&long_name, "123");
+        assert_eq!(normalized.len(), 32);
+    }
+
+    #[test]
+    fn test_validate_meeting_day() {
+        for i in 0..=6 {
+            assert!(validate_meeting_day(i).is_ok());
+        }
+        assert!(validate_meeting_day(-1).is_err());
+        assert!(validate_meeting_day(7).is_err());
+    }
+
+    #[test]
+    fn test_validate_append_only_tx() {
+        // Negative amount required
+        assert!(validate_append_only_tx(-100, TxType::Withdrawal).is_ok());
+        assert!(validate_append_only_tx(100, TxType::Withdrawal).is_err());
+        assert!(validate_append_only_tx(0, TxType::Withdrawal).is_err());
+
+        assert!(validate_append_only_tx(-100, TxType::LoanDisbursement).is_ok());
+        assert!(validate_append_only_tx(100, TxType::LoanDisbursement).is_err());
+
+        assert!(validate_append_only_tx(-100, TxType::DividendPayout).is_ok());
+        assert!(validate_append_only_tx(100, TxType::DividendPayout).is_err());
+
+        // Positive amount required
+        assert!(validate_append_only_tx(100, TxType::Deposit).is_ok());
+        assert!(validate_append_only_tx(-100, TxType::Deposit).is_err());
+        assert!(validate_append_only_tx(0, TxType::Deposit).is_err());
+
+        assert!(validate_append_only_tx(100, TxType::SocialFundPayment).is_ok());
+        assert!(validate_append_only_tx(-100, TxType::SocialFundPayment).is_err());
+
+        assert!(validate_append_only_tx(100, TxType::LoanRepayment).is_ok());
+        assert!(validate_append_only_tx(-100, TxType::LoanRepayment).is_err());
+
+        assert!(validate_append_only_tx(100, TxType::FinePayment).is_ok());
+        assert!(validate_append_only_tx(-100, TxType::FinePayment).is_err());
+    }
+}
