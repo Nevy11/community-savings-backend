@@ -54,6 +54,7 @@ async fn main() {
             || origin.starts_with("http://127.0.0.1:")
             || origin.contains(".netlify.app")
             || origin.contains(".vercel.app")
+            || origin.contains(".pages.dev")
         {
             origin.to_string()
         } else {
