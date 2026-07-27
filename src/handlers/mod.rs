@@ -44,7 +44,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
     let public_mpesa_routes = Router::new()
         .nest("/mpesa", mpesa::public_routes())
         .nest("/webhooks", webhooks::routes())
-        .layer(GovernorLayer { config: governor_conf.clone() });
+        .layer(GovernorLayer::new(governor_conf.clone()));
 
     Router::new()
         .merge(protected_routes)

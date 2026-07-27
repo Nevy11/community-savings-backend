@@ -284,6 +284,8 @@ fn validate_positive_amount(amount: i64, field: &str) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
 
     #[test]
     fn flat_rate_interest_is_integer_safe() {
@@ -309,5 +311,148 @@ mod tests {
         let shares = time_weighted_dividend_shares(&contributions, 9_000).unwrap();
         let total: i64 = shares.iter().map(|s| s.share_amount).sum();
         assert_eq!(total, 9_000);
+    }
+
+    #[test]
+    fn test_flat_rate_extreme_edge_cases() {
+        // High principal, high rate, long term
+        let res = flat_rate_total_interest(i64::MAX, i32::MAX, i32::MAX);
+        assert!(res.is_err(), "Expected overflow error to be handled gracefully");
+
+        // Zero rate
+        let interest = flat_rate_total_interest(100_000, 0, 12).unwrap();
+        assert_eq!(interest, 0);
+
+        // Negative values check
+        assert!(flat_rate_total_interest(-100, 1000, 12).is_err());
+        assert!(flat_rate_total_interest(100, -1000, 12).is_err());
+        assert!(flat_rate_total_interest(100, 1000, -12).is_err());
+    }
+
+    #[test]
+    fn test_reducing_balance_extreme_edge_cases() {
+        // Extremely high values
+        let res = reducing_balance_monthly_payment(i64::MAX, i32::MAX, 120);
+        assert!(res.is_err(), "Expected overflow to be handled gracefully");
+
+        // Zero interest rate
+        let payment = reducing_balance_monthly_payment(120_000, 0, 12).unwrap();
+        assert_eq!(payment, 10_000);
+
+        // Invalid inputs
+        assert!(reducing_balance_monthly_payment(0, 1000, 12).is_err());
+        assert!(reducing_balance_monthly_payment(100_000, -10, 12).is_err());
+    }
+
+    #[test]
+    fn test_dividend_extreme_edge_cases() {
+        // Empty contributions
+        let shares = time_weighted_dividend_shares(&[], 10_000).unwrap();
+        assert!(shares.is_empty());
+
+        // Zero or negative distributable pool
+        assert!(time_weighted_dividend_shares(&[ContributionWeight {
+            member_id: uuid::Uuid::new_v4(),
+            amount: 10_000,
+            months_held: 1,
+        }], 0).is_err());
+
+        assert!(time_weighted_dividend_shares(&[ContributionWeight {
+            member_id: uuid::Uuid::new_v4(),
+            amount: 10_000,
+            months_held: 1,
+        }], -5000).is_err());
+
+        // Extreme pool and amounts (testing i128 overflow protections)
+        let extreme_contributions = vec![
+            ContributionWeight {
+                member_id: uuid::Uuid::new_v4(),
+                amount: i64::MAX,
+                months_held: i32::MAX,
+            },
+            ContributionWeight {
+                member_id: uuid::Uuid::new_v4(),
+                amount: i64::MAX,
+                months_held: i32::MAX,
+            }
+        ];
+        
+        let shares = time_weighted_dividend_shares(&extreme_contributions, i64::MAX);
+        assert!(shares.is_err(), "Expected overflow on massive pool * weight multiplication");
+    }
+
+    #[test]
+    fn test_penalty_extreme_cases() {
+        // Daily penalty max edge cases
+        let res = fixed_daily_penalty(i32::MAX, i64::MAX);
+        assert!(res.is_err(), "Expected overflow to be handled");
+
+        assert!(fixed_daily_penalty(0, 100).is_err());
+        assert!(fixed_daily_penalty(10, 0).is_err());
+
+        // Stacked penalty
+        let res2 = stacked_penalty_on_principal(i64::MAX, i32::MAX, i32::MAX);
+        assert!(res2.is_err(), "Expected overflow to be handled");
+    }
+
+    #[test]
+    fn test_concurrent_ledger_dividend_writes() {
+        // Simulate concurrent processing of ledgers/dividends
+        let num_threads = 50;
+        let pool = 1_000_000;
+        
+        // Mock a shared ledger state that threads will try to write their calculated dividends to.
+        let shared_ledger = Arc::new(Mutex::new(0i64));
+        let mut handles = vec![];
+
+        for i in 0..num_threads {
+            let ledger_clone = Arc::clone(&shared_ledger);
+            let handle = thread::spawn(move || {
+                // Each thread calculates dividends for a slightly different set of contributions
+                let contributions = vec![
+                    ContributionWeight {
+                        member_id: uuid::Uuid::new_v4(),
+                        amount: 10_000 + i as i64,
+                        months_held: 12,
+                    },
+                    ContributionWeight {
+                        member_id: uuid::Uuid::new_v4(),
+                        amount: 5_000 + i as i64,
+                        months_held: 6,
+                    },
+                ];
+
+                let shares = time_weighted_dividend_shares(&contributions, pool).unwrap();
+                let sum: i64 = shares.iter().map(|s| s.share_amount).sum();
+                assert_eq!(sum, pool);
+
+                // Safely "write" to the concurrent ledger
+                let mut ledger = ledger_clone.lock().unwrap();
+                *ledger += sum;
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let final_ledger = *shared_ledger.lock().unwrap();
+        // 50 threads * pool sum
+        assert_eq!(final_ledger, pool * (num_threads as i64));
+    }
+
+    #[test]
+    fn test_amortization_quotes_generation() {
+        let quotes = amortization_quotes(100_000, 1200, 12).unwrap();
+        assert_eq!(quotes.len(), 2);
+        
+        assert_eq!(quotes[0].method, InterestMethod::FlatRate);
+        assert_eq!(quotes[0].total_interest, 12_000);
+        
+        assert_eq!(quotes[1].method, InterestMethod::ReducingBalance);
+        
+        let q_flat = quote_for_method(InterestMethod::FlatRate, 100_000, 1200, 12).unwrap();
+        assert_eq!(q_flat, quotes[0]);
     }
 }
